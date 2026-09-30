@@ -3,25 +3,35 @@ use std::{
     path::PathBuf,
 };
 
+use crate::templates::manager::TemplateManager;
+
 /// Central runtime core of BuliCloud.
 ///
 /// The `CloudCore` manages the root directory and provides access
 /// to the main runtime paths used by the cloud system.
 pub struct CloudCore {
     root_path: PathBuf,
+    template_manager: TemplateManager,
 }
 
 impl CloudCore {
-    /// Create new `CloudCore`
+    /// Create new `CloudCore` and initializes Managers.
     ///
     /// # Arguments
     /// * `root_path` - root directory for buli cloud
+    ///
     /// # Returns
     /// * new CloudCore instance
     pub fn new<P: Into<PathBuf>>(root_path: P) -> Self {
+        let root_path = root_path.into();
         Self {
-            root_path: root_path.into(),
+            template_manager: TemplateManager::new(root_path.join("templates")),
+            root_path,
         }
+    }
+
+    pub fn template_manager(&self) -> &TemplateManager {
+        &self.template_manager
     }
 
     /// Returns the path to the templates directory

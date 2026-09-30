@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cloud_api::http::http_server::start_http_server;
 use cloud_core::{
     CloudCore,
@@ -11,7 +13,7 @@ use cloud_core::{
 async fn main() {
     log(LogLevel::Info, "Starting BuliCloud daemon...");
 
-    let core = CloudCore::new("./bulicloud");
+    let core = Arc::new(CloudCore::new("./bulicloud"));
 
     if let Err(error) = core.initialize() {
         log(LogLevel::Error, &format!("Failed to initialize BuliCloud-Core: {error}"));
@@ -21,13 +23,13 @@ async fn main() {
     log(LogLevel::Info, "BuliCloud-Core initialized");
     log(LogLevel::Info, "BuliCloud daemon is running");
 
-    tokio::spawn(async {
+    tokio::spawn(async move {
         log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");
-        if let Err(error) = start_http_server().await {
+        log(LogLevel::Info, "HTTP Server is running");
+
+        if let Err(error) = start_http_server(Arc::clone(&core)).await {
             log(LogLevel::Error, &format!("failed starting http server: {}", error));
         }
-
-        log(LogLevel::Info, "HTTP Server is running");
     });
 
     if let Err(error) = tokio::signal::ctrl_c().await {
