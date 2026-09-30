@@ -8,6 +8,8 @@ use std::{
     path::PathBuf,
 };
 
+use tokio::sync::RwLock;
+
 use crate::templates::template::Template;
 
 /// Manages all template-related filesystem operations.
@@ -17,7 +19,7 @@ use crate::templates::template::Template;
 /// templates directory.
 pub struct TemplateManager {
     templates_path: PathBuf,
-    templates: HashMap<String, Template>,
+    templates: RwLock<HashMap<String, Template>>,
 }
 
 impl TemplateManager {
@@ -33,19 +35,25 @@ impl TemplateManager {
     pub fn new(templates_path: PathBuf) -> Self {
         Self {
             templates_path,
-            templates: HashMap::new(),
+            templates: RwLock::new(HashMap::new()),
         }
     }
 
-    pub fn load_templates(&self) -> Result<HashMap<String, Template>, Error> {
-        let templates = self.templates_list()?;
-        let mut result = HashMap::new();
+    /// Reads all templates from the disk and puts them into the HashMap.
+    ///
+    /// # Errors
+    /// throws an error if an error occurs while reading the templates from the disk
+    pub async fn load_templates(&self) -> Result<(), Error> {
+        let templates = self.templates_list_from_disk()?;
+        let mut cache = self.templates.write().await;
+
+        cache.clear();
 
         for template in templates {
-            result.insert(template.name().to_string(), template);
+            cache.insert(template.name().to_string(), template);
         }
 
-        Ok(result)
+        Ok(())
     }
 
     /// Returns the root directory in which templates are stored.
@@ -70,13 +78,19 @@ impl TemplateManager {
     ///
     /// * a template with the same name already exists
     /// * the directory cannot be created
-    pub fn create_new_template(&self, name: &str) -> Result<(), Error> {
+    pub async fn create_new_template(&self, name: &str) -> Result<(), Error> {
         let template_path = self.templates_path.join(name);
-        if !self.exists(name) {
-            return fs::create_dir_all(template_path);
+
+        if self.exists(name) {
+            return Err(Error::new(AlreadyExists, format!("The template {name} already exists.")));
         }
 
-        Err(Error::new(AlreadyExists, format!("The template {name} already exists.")))
+        fs::create_dir_all(template_path)?;
+        let template = Template::new(name);
+        let mut templates = self.templates.write().await;
+
+        templates.insert(name.to_string(), template);
+        Ok(())
     }
 
     /// Deletes an existing template and all of its contents.
@@ -91,13 +105,17 @@ impl TemplateManager {
     ///
     /// * the template does not exist
     /// * the template directory cannot be removed
-    pub fn delete_template(&self, name: &str) -> Result<(), Error> {
+    pub async fn delete_template(&self, name: &str) -> Result<(), Error> {
         let template_path = self.templates_path.join(name);
         if !self.exists(name) {
             return Err(Error::new(NotFound, format!("The template {name} doesn't exist.")));
         }
 
-        fs::remove_dir_all(template_path)
+        fs::remove_dir_all(template_path)?;
+        let mut templates = self.templates.write().await;
+
+        templates.remove(name);
+        Ok(())
     }
 
     /// Returns the filesystem path of a template.
@@ -132,7 +150,7 @@ impl TemplateManager {
     ///
     /// Returns an error if the templates directory cannot be read
     /// or one of its directory entries cannot be accessed.
-    pub fn templates_list(&self) -> Result<Vec<Template>, Error> {
+    pub fn templates_list_from_disk(&self) -> Result<Vec<Template>, Error> {
         let mut templates: Vec<Template> = Vec::new();
         for entry in fs::read_dir(&self.templates_path)? {
             let entry = entry?;
@@ -147,6 +165,25 @@ impl TemplateManager {
         }
         templates.sort_by(|a, b| a.name().cmp(b.name()));
         Ok(templates)
+    }
+
+    /// Returns all currently loaded templates.
+    ///
+    /// Templates are read from the in-memory cache and sorted
+    /// alphabetically by name.
+    ///
+    /// # Returns
+    ///
+    /// A vector containing all loaded templates.
+    pub async fn templates_list(&self) -> Vec<Template> {
+        let templates = self.templates.read().await;
+        templates.values().cloned().collect()
+    }
+
+    pub async fn get_template(&self, name: &str) -> Option<Template> {
+        let templates = self.templates.read().await;
+
+        templates.get(name).cloned()
     }
 
     /// Checks whether a template with the given name exists.

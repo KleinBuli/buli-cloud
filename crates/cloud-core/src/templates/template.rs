@@ -5,6 +5,12 @@ pub struct Template {
     name: String,
 }
 
+impl Clone for Template {
+    fn clone(&self) -> Self {
+        Self { name: self.name.clone() }
+    }
+}
+
 impl Template {
     pub fn new(name: &str) -> Self {
         Self { name: String::from(name) }

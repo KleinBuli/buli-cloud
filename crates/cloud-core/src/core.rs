@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::templates::template_manager::TemplateManager;
+use crate::{instances::instance_manager::InstanceManager, templates::template_manager::TemplateManager};
 
 /// Central runtime core of BuliCloud.
 ///
@@ -12,6 +12,7 @@ use crate::templates::template_manager::TemplateManager;
 pub struct CloudCore {
     root_path: PathBuf,
     template_manager: TemplateManager,
+    instance_manager: InstanceManager,
 }
 
 impl CloudCore {
@@ -26,12 +27,17 @@ impl CloudCore {
         let root_path = root_path.into();
         Self {
             template_manager: TemplateManager::new(root_path.join("templates")),
+            instance_manager: InstanceManager::new(),
             root_path,
         }
     }
 
     pub fn template_manager(&self) -> &TemplateManager {
         &self.template_manager
+    }
+
+    pub fn instance_manager(&self) -> &InstanceManager {
+        &self.instance_manager
     }
 
     /// Returns the path to the templates directory
