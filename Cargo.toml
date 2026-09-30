@@ -1,6 +1,8 @@
-[package]
-name = "buli-cloud"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/cloud-core",
+    "crates/cloud-cli",
+    "crates/cloud-api"
+]
 
-[dependencies]
+resolver="2"

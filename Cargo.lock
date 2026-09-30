@@ -3,5 +3,13 @@
 version = 4
 
 [[package]]
-name = "buli-cloud"
+name = "cloud-api"
+version = "0.1.0"
+
+[[package]]
+name = "cloud-cli"
+version = "0.1.0"
+
+[[package]]
+name = "cloud-core"
 version = "0.1.0"
