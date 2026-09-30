@@ -42,7 +42,7 @@ pub async fn start_http_server(cloud_core: Arc<CloudCore>) -> std::io::Result<()
         .route("/health", get(health))
         .route("/paths", get(paths))
         .route("/templates", get(templates))
-        .route("/templates/:name", post(create_template))
+        .route("/templates/{name}", post(create_template))
         .with_state(cloud_core);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
