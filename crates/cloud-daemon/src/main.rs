@@ -15,7 +15,7 @@ async fn main() {
 
     let core = Arc::new(CloudCore::new("./bulicloud"));
 
-    if let Err(error) = core.initialize() {
+    if let Err(error) = core.initialize().await {
         log(LogLevel::Error, &format!("Failed to initialize BuliCloud-Core: {error}"));
         return;
     }
