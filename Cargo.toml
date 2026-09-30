@@ -2,7 +2,8 @@
 members = [
     "crates/cloud-core",
     "crates/cloud-cli",
-    "crates/cloud-api"
+    "crates/cloud-api", 
+    "crates/cloud-daemon"
 ]
 
 resolver="2"

@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod core;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use core::CloudCore;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod templates;
+pub mod instances;
+pub mod process;
+pub mod logger;
