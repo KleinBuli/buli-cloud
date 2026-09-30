@@ -2,7 +2,11 @@ use std::collections::HashMap;
 
 use tokio::sync::RwLock;
 
-use crate::{instances::instance::Instance, templates::template::Template};
+use crate::{
+    instances::instance::{Instance, InstanceStatus},
+    logger::logger::{LogLevel, log},
+    templates::template::Template,
+};
 
 pub struct InstanceManager {
     instances: RwLock<HashMap<String, Instance>>,
@@ -15,9 +19,20 @@ impl InstanceManager {
         }
     }
 
-    pub async fn add_instance(&self, instance: Instance) {
+    pub async fn add_instance(&self, instance: Instance) -> bool {
         let mut instances = self.instances.write().await;
+
+        if instances.contains_key(instance.id()) {
+            return false;
+        }
+
         instances.insert(instance.id().to_string(), instance);
+        true
+    }
+
+    pub async fn exists(&self, id: &str) -> bool {
+        let instances = self.instances.read().await;
+        instances.contains_key(id)
     }
 
     pub async fn get_instance(&self, id: &str) -> Option<Instance> {
@@ -36,16 +51,17 @@ impl InstanceManager {
     }
 
     pub async fn create_instance_from_template(&self, template: Template) -> Instance {
-        let instances = self.instances_list().await;
+        let mut instances = self.instances.write().await;
         let mut number = 1;
 
         loop {
             let id = format!("{}-{}", template.name(), number);
 
-            if !instances.iter().any(|inst| inst.id() == id) {
+            if !instances.contains_key(&id) {
                 let new_instance = Instance::new(&id, Some(template.name().to_string()));
 
-                self.add_instance(new_instance.clone()).await;
+                instances.insert(id, new_instance.clone());
+
                 return new_instance;
             }
 
@@ -54,5 +70,30 @@ impl InstanceManager {
     }
 
     /// TODO
-    pub fn create_instance_as_static(&self) {}
+    pub async fn create_instance_as_static(&self) {}
+
+    pub async fn start_instance(&self, id: &str) -> Result<(), ()> {
+        let mut instances = self.instances.write().await;
+        let instance = instances.get_mut(id).ok_or(())?;
+        instance.set_status(InstanceStatus::Starting);
+        log(LogLevel::Info, &format!("Starting Instance: {} ...", instance.id()));
+
+        // TODO: Paper Server wirklich starten ....
+
+        instance.set_status(InstanceStatus::Running);
+        log(LogLevel::Info, &format!("Instance: {} started successfully", instance.id()));
+        Ok(())
+    }
+
+    pub async fn stop_instance(&self, id: &str) -> Result<(), ()> {
+        let mut instances = self.instances.write().await;
+        let instance = instances.get_mut(id).ok_or(())?;
+
+        // TODO: Paper Server stoppen.
+
+        instance.set_status(InstanceStatus::Stopped);
+        log(LogLevel::Info, &format!("Instance: {} stopped", instance.id()));
+
+        Ok(())
+    }
 }

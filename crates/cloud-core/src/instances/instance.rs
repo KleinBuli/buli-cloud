@@ -27,6 +27,10 @@ impl Instance {
     pub fn status(&self) -> &InstanceStatus {
         &self.status
     }
+
+    pub fn set_status(&mut self, status: InstanceStatus) {
+        self.status = status
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

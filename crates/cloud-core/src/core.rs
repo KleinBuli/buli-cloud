@@ -3,7 +3,11 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{instances::instance_manager::InstanceManager, templates::template_manager::TemplateManager};
+use crate::{
+    instances::{instance::Instance, instance_manager::InstanceManager},
+    templates::template_manager::TemplateManager,
+    util::file_utils::copy_dir_all,
+};
 
 /// Central runtime core of BuliCloud.
 ///
@@ -58,6 +62,28 @@ impl CloudCore {
     /// Returns the path to the static servers directory
     pub fn static_servers_path(&self) -> PathBuf {
         self.root_path.join("static-servers")
+    }
+
+    pub async fn prepare_instance(&self, instance: &Instance) -> Result<(), std::io::Error> {
+        match instance.template_name() {
+            Some(template_name) => {
+                let template = self
+                    .template_manager()
+                    .get_template(template_name)
+                    .await
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, format!("Template {template_name} not found")))?;
+
+                let instance_path = self.running_path().join(instance.id());
+                let template_path = self.templates_path().join(template.name());
+
+                copy_dir_all(template_path, instance_path)?;
+
+                Ok(())
+            }
+
+            // TODO: static instances
+            None => Ok(()),
+        }
     }
 
     /// initalizes the CloudCore

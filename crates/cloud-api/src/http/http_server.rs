@@ -51,13 +51,38 @@ async fn create_instance_from_template(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let instance = cloud_core.instance_manager().create_instance_from_template(template).await;
+    cloud_core
+        .prepare_instance(&instance)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok((StatusCode::CREATED, Json(instance)))
+}
+
+async fn delete_instance(State(cloud_core): State<Arc<CloudCore>>, Path(id): Path<String>) -> StatusCode {
+    match cloud_core.instance_manager().remove_instance(&id).await {
+        Some(_) => StatusCode::NO_CONTENT,
+        None => StatusCode::NOT_FOUND,
+    }
 }
 
 async fn instances(State(cloud_core): State<Arc<CloudCore>>) -> Json<Vec<Instance>> {
     let instance_manager = cloud_core.instance_manager();
     Json(instance_manager.instances_list().await)
+}
+
+async fn start_instance(State(cloud_core): State<Arc<CloudCore>>, Path(id): Path<String>) -> StatusCode {
+    match cloud_core.instance_manager().start_instance(&id).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
+    }
+}
+
+async fn stop_instance(State(cloud_core): State<Arc<CloudCore>>, Path(id): Path<String>) -> StatusCode {
+    match cloud_core.instance_manager().stop_instance(&id).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::NOT_FOUND,
+    }
 }
 
 pub async fn start_http_server(cloud_core: Arc<CloudCore>) -> std::io::Result<()> {
@@ -69,6 +94,9 @@ pub async fn start_http_server(cloud_core: Arc<CloudCore>) -> std::io::Result<()
         .route("/templates/{name}", delete(delete_template))
         .route("/instances", get(instances))
         .route("/instances/{template_name}", post(create_instance_from_template))
+        .route("/instances/{id}", delete(delete_instance))
+        .route("/instances/{id}/start", post(start_instance))
+        .route("/instances/{id}/stop", post(stop_instance))
         .with_state(cloud_core);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
