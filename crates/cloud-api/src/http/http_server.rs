@@ -99,9 +99,9 @@ pub async fn start_http_server(cloud_core: Arc<CloudCore>) -> std::io::Result<()
         .route("/templates/{name}", delete(delete_template))
         .route("/instances", get(instances))
         .route("/instances/new/{template_name}", post(create_instance_from_template))
-        .route("/instances/remove/{id}", delete(delete_instance))
-        .route("/instances/start/{id}", post(start_instance))
-        .route("/instances/stop/{id}/", post(stop_instance))
+        .route("/instances/{id}/remove", delete(delete_instance))
+        .route("/instances/{id}/start", post(start_instance))
+        .route("/instances/{id}/stop", post(stop_instance))
         .with_state(cloud_core);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
