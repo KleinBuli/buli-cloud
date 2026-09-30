@@ -60,9 +60,14 @@ async fn create_instance_from_template(
 }
 
 async fn delete_instance(State(cloud_core): State<Arc<CloudCore>>, Path(id): Path<String>) -> StatusCode {
-    match cloud_core.instance_manager().remove_instance(&id).await {
-        Some(_) => StatusCode::NO_CONTENT,
-        None => StatusCode::NOT_FOUND,
+    let instance = match cloud_core.instance_manager().get_instance(&id).await {
+        Some(instance) => instance,
+        None => return StatusCode::NOT_FOUND,
+    };
+
+    match cloud_core.prepare_instance_stopping(&instance).await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 

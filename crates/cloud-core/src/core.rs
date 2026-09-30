@@ -1,5 +1,6 @@
 use std::{
-    fs::{self},
+    fs::{self, remove_dir_all},
+    io::Error,
     path::PathBuf,
 };
 
@@ -84,6 +85,20 @@ impl CloudCore {
             // TODO: static instances
             None => Ok(()),
         }
+    }
+
+    pub async fn prepare_instance_stopping(&self, instance: &Instance) -> Result<(), Error> {
+        let instance_path = self.running_path().join(instance.id());
+        self.instance_manager
+            .stop_instance(instance.id())
+            .await
+            .map_err(|_| Error::new(std::io::ErrorKind::NotFound, format!("Instance {} not found", instance.id())))?;
+
+        remove_dir_all(instance_path)?;
+
+        self.instance_manager.remove_instance(instance.id()).await;
+
+        Ok(())
     }
 
     /// initalizes the CloudCore
