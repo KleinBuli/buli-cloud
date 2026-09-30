@@ -4,7 +4,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use cloud_core::CloudCore;
 
@@ -37,12 +37,21 @@ async fn create_template(State(cloud_core): State<Arc<CloudCore>>, Path(name): P
     }
 }
 
+async fn delete_template(State(cloud_core): State<Arc<CloudCore>>, Path(name): Path<String>) -> StatusCode {
+    match cloud_core.template_manager().delete_template(&name) {
+        Ok(_) => StatusCode::CREATED,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 pub async fn start_http_server(cloud_core: Arc<CloudCore>) -> std::io::Result<()> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/paths", get(paths))
         .route("/templates", get(templates))
         .route("/templates/{name}", post(create_template))
+        .route("/templates/{name}", delete(delete_template))
         .with_state(cloud_core);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;

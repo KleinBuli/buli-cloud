@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs,
     io::{
         Error,
@@ -7,6 +8,8 @@ use std::{
     path::PathBuf,
 };
 
+use crate::templates::template::Template;
+
 /// Manages all template-related filesystem operations.
 ///
 /// The `TemplateManager` is responsible for creating, deleting,
@@ -14,6 +17,7 @@ use std::{
 /// templates directory.
 pub struct TemplateManager {
     templates_path: PathBuf,
+    templates: HashMap<String, Template>,
 }
 
 impl TemplateManager {
@@ -27,7 +31,21 @@ impl TemplateManager {
     ///
     /// A new `TemplateManager` instance.
     pub fn new(templates_path: PathBuf) -> Self {
-        Self { templates_path }
+        Self {
+            templates_path,
+            templates: HashMap::new(),
+        }
+    }
+
+    pub fn load_templates(&self) -> Result<HashMap<String, Template>, Error> {
+        let templates = self.templates_list()?;
+        let mut result = HashMap::new();
+
+        for template in templates {
+            result.insert(template.name().to_string(), template);
+        }
+
+        Ok(result)
     }
 
     /// Returns the root directory in which templates are stored.
@@ -114,20 +132,20 @@ impl TemplateManager {
     ///
     /// Returns an error if the templates directory cannot be read
     /// or one of its directory entries cannot be accessed.
-    pub fn templates(&self) -> Result<Vec<String>, Error> {
-        let mut templates: Vec<String> = Vec::new();
+    pub fn templates_list(&self) -> Result<Vec<Template>, Error> {
+        let mut templates: Vec<Template> = Vec::new();
         for entry in fs::read_dir(&self.templates_path)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
                 if let Some(folder_name) = path.file_name() {
                     if let Some(name_str) = folder_name.to_str() {
-                        templates.push(String::from(name_str));
+                        templates.push(Template::new(name_str));
                     }
                 }
             }
         }
-        templates.sort();
+        templates.sort_by(|a, b| a.name().cmp(b.name()));
         Ok(templates)
     }
 

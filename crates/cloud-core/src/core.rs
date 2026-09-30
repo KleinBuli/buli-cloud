@@ -3,7 +3,7 @@ use std::{
     path::PathBuf,
 };
 
-use crate::templates::manager::TemplateManager;
+use crate::templates::template_manager::TemplateManager;
 
 /// Central runtime core of BuliCloud.
 ///
