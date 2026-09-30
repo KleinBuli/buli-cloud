@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use cloud_core::CloudCore;
+use cloud_core::{CloudCore, templates::template::Template};
 
 async fn health() -> &'static str {
     "BuliCloud is running!"
@@ -22,8 +22,8 @@ async fn paths(State(cloud_core): State<Arc<CloudCore>>) -> String {
     )
 }
 
-async fn templates(State(cloud_core): State<Arc<CloudCore>>) -> Result<Json<Vec<String>>, StatusCode> {
-    match cloud_core.template_manager().templates() {
+async fn templates(State(cloud_core): State<Arc<CloudCore>>) -> Result<Json<Vec<Template>>, StatusCode> {
+    match cloud_core.template_manager().templates_list() {
         Ok(templates) => Ok(Json(templates)),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
