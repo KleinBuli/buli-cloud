@@ -1,6 +1,10 @@
 [package]
 name = "cloud-api"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+cloud-core = { path = "../cloud-core" }

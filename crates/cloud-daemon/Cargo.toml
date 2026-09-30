@@ -5,3 +5,6 @@ edition = "2024"
 
 [dependencies]
 cloud-core = { path = "../cloud-core" }
+cloud-api = { path = "../cloud-api" }
+
+tokio = { version = "1", features = ["full"] }
