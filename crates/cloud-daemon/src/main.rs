@@ -22,9 +22,12 @@ async fn main() {
     log(LogLevel::Info, "BuliCloud daemon is running");
 
     tokio::spawn(async {
+        log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");
         if let Err(error) = start_http_server().await {
             log(LogLevel::Error, &format!("failed starting http server: {}", error));
         }
+
+        log(LogLevel::Info, "HTTP Server is running");
     });
 
     if let Err(error) = tokio::signal::ctrl_c().await {
