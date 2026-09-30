@@ -89,12 +89,13 @@ impl CloudCore {
     /// initalizes the CloudCore
     /// # Returns
     /// * Result<()>
-    pub fn initialize(&self) -> std::io::Result<()> {
+    pub async fn initialize(&self) -> std::io::Result<()> {
         fs::create_dir_all(self.templates_path())?;
         fs::create_dir_all(self.config_path())?;
         fs::create_dir_all(self.static_servers_path())?;
         fs::create_dir_all(self.running_path())?;
 
+        self.template_manager().load_templates().await?;
         Ok(())
     }
 }
