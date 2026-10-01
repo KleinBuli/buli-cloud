@@ -37,5 +37,6 @@ impl Instance {
 pub enum InstanceStatus {
     Starting,
     Running,
+    Stopping,
     Stopped,
 }

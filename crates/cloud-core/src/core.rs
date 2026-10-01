@@ -32,7 +32,7 @@ impl CloudCore {
         let root_path = root_path.into();
         Self {
             template_manager: TemplateManager::new(root_path.join("templates")),
-            instance_manager: InstanceManager::new(),
+            instance_manager: InstanceManager::new(root_path.join("running")),
             root_path,
         }
     }
@@ -77,6 +77,10 @@ impl CloudCore {
                 let instance_path = self.running_path().join(instance.id());
                 let template_path = self.templates_path().join(template.name());
 
+                if instance_path.exists() {
+                    return Err(Error::new(std::io::ErrorKind::AlreadyExists, "Instance directory already exists."));
+                }
+
                 copy_dir_all(template_path, instance_path)?;
 
                 Ok(())
@@ -96,7 +100,10 @@ impl CloudCore {
 
         remove_dir_all(instance_path)?;
 
-        self.instance_manager.remove_instance(instance.id()).await;
+        self.instance_manager
+            .remove_instance(instance.id())
+            .await
+            .map_err(|_| Error::new(std::io::ErrorKind::Other, format!("Could not remove instance {}", instance.id())))?;
 
         Ok(())
     }

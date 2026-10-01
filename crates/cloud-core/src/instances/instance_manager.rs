@@ -1,6 +1,9 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
-use tokio::sync::RwLock;
+use tokio::{
+    process::{Child, Command},
+    sync::{Mutex, RwLock},
+};
 
 use crate::{
     instances::instance::{Instance, InstanceStatus},
@@ -9,13 +12,17 @@ use crate::{
 };
 
 pub struct InstanceManager {
+    running_path: PathBuf,
     instances: RwLock<HashMap<String, Instance>>,
+    processes: Mutex<HashMap<String, Child>>,
 }
 
 impl InstanceManager {
-    pub fn new() -> Self {
+    pub fn new(running_path: PathBuf) -> Self {
         Self {
+            running_path,
             instances: RwLock::new(HashMap::new()),
+            processes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -40,9 +47,16 @@ impl InstanceManager {
         instances.get(id).cloned()
     }
 
-    pub async fn remove_instance(&self, id: &str) -> Option<Instance> {
+    pub async fn remove_instance(&self, id: &str) -> Result<Option<Instance>, ()> {
+        let processes = self.processes.lock().await;
+
+        if processes.contains_key(id) {
+            return Err(());
+        }
+
         let mut instances = self.instances.write().await;
-        instances.remove(id)
+
+        Ok(instances.remove(id))
     }
 
     pub async fn instances_list(&self) -> Vec<Instance> {
@@ -73,26 +87,123 @@ impl InstanceManager {
     pub async fn create_instance_as_static(&self) {}
 
     pub async fn start_instance(&self, id: &str) -> Result<(), ()> {
-        let mut instances = self.instances.write().await;
-        let instance = instances.get_mut(id).ok_or(())?;
-        instance.set_status(InstanceStatus::Starting);
-        log(LogLevel::Info, &format!("Starting Instance: {} ...", instance.id()));
+        {
+            let instances = self.instances.read().await;
 
-        // TODO: Paper Server wirklich starten ....
+            if !instances.contains_key(id) {
+                return Err(());
+            }
+        }
 
-        instance.set_status(InstanceStatus::Running);
-        log(LogLevel::Info, &format!("Instance: {} started successfully", instance.id()));
+        {
+            let mut processes = self.processes.lock().await;
+
+            if processes.contains_key(id) {
+                log(
+                    LogLevel::Warn,
+                    &format!("Couldn't start instance {} since it's already running.", id),
+                );
+
+                return Ok(());
+            }
+
+            {
+                let mut instances = self.instances.write().await;
+                let instance = instances.get_mut(id).ok_or(())?;
+
+                instance.set_status(InstanceStatus::Starting);
+
+                log(LogLevel::Info, &format!("Starting Instance: {} ...", instance.id()));
+            }
+
+            let child = match Command::new("java")
+                .arg("-jar")
+                .arg("paper.jar")
+                .current_dir(self.running_path.join(id))
+                .spawn()
+            {
+                Ok(child) => child,
+                Err(_) => {
+                    let mut instances = self.instances.write().await;
+
+                    if let Some(instance) = instances.get_mut(id) {
+                        instance.set_status(InstanceStatus::Stopped);
+                    }
+
+                    log(LogLevel::Error, &format!("Could not start instance {}", id));
+
+                    return Err(());
+                }
+            };
+
+            processes.insert(id.to_string(), child);
+        }
+
+        {
+            let mut instances = self.instances.write().await;
+            let instance = instances.get_mut(id).ok_or(())?;
+
+            instance.set_status(InstanceStatus::Running);
+
+            log(LogLevel::Info, &format!("Instance: {} started successfully", instance.id()));
+        }
+
         Ok(())
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), ()> {
-        let mut instances = self.instances.write().await;
-        let instance = instances.get_mut(id).ok_or(())?;
+        {
+            let instances = self.instances.read().await;
 
-        // TODO: Paper Server stoppen.
+            if !instances.contains_key(id) {
+                return Err(());
+            }
+        }
 
-        instance.set_status(InstanceStatus::Stopped);
-        log(LogLevel::Info, &format!("Instance: {} stopped", instance.id()));
+        let mut child = {
+            let mut processes = self.processes.lock().await;
+
+            match processes.remove(id) {
+                Some(child) => child,
+                None => {
+                    log(LogLevel::Warn, &format!("Couldn't stop instance {} since it isn't running.", id));
+
+                    return Ok(());
+                }
+            }
+        };
+
+        {
+            let mut instances = self.instances.write().await;
+
+            if let Some(instance) = instances.get_mut(id) {
+                instance.set_status(InstanceStatus::Stopping);
+            }
+        }
+
+        if child.kill().await.is_err() {
+            let mut processes = self.processes.lock().await;
+            processes.insert(id.to_string(), child);
+
+            let mut instances = self.instances.write().await;
+
+            if let Some(instance) = instances.get_mut(id) {
+                instance.set_status(InstanceStatus::Running);
+            }
+            log(LogLevel::Error, &format!("Failed to stop instance {}", id));
+
+            return Err(());
+        }
+
+        {
+            let mut instances = self.instances.write().await;
+
+            if let Some(instance) = instances.get_mut(id) {
+                instance.set_status(InstanceStatus::Stopped);
+            }
+        }
+
+        log(LogLevel::Info, &format!("Instance: {} stopped", id));
 
         Ok(())
     }
