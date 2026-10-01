@@ -7,3 +7,4 @@ edition = "2024"
 chrono = "0.4.45"
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
+reqwest = { version = "0.13", features = ["json"] }

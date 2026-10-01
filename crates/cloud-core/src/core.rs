@@ -65,6 +65,11 @@ impl CloudCore {
         self.root_path.join("static-servers")
     }
 
+    // Returns the path to the cache directory
+    pub fn cache_path(&self) -> PathBuf {
+        self.root_path.join("cache")
+    }
+
     pub async fn prepare_instance(&self, instance: &Instance) -> Result<(), std::io::Error> {
         match instance.template_name() {
             Some(template_name) => {
@@ -116,6 +121,7 @@ impl CloudCore {
         fs::create_dir_all(self.config_path())?;
         fs::create_dir_all(self.static_servers_path())?;
         fs::create_dir_all(self.running_path())?;
+        fs::create_dir_all(self.cache_path())?;
 
         self.template_manager().load_templates().await?;
         Ok(())
