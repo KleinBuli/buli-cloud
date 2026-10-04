@@ -4,7 +4,7 @@ use cloud_api::http::http_server::start_http_server;
 use cloud_core::{
     CloudCore,
     logger::logger::{
-        LogLevel::{self},
+        LogLevel::{self, Error},
         log,
     },
 };
@@ -13,7 +13,15 @@ use cloud_core::{
 async fn main() {
     log(LogLevel::Info, "Starting BuliCloud daemon...");
 
-    let core = Arc::new(CloudCore::new("./bulicloud"));
+    let core = match CloudCore::new("./bulicloud").await {
+        Ok(core) => core,
+        Err(error) => {
+            log(Error, &format!("Error to create BuliCloud-Core: {error}"));
+            return;
+        }
+    };
+
+    let core = Arc::new(core);
 
     if let Err(error) = core.initialize().await {
         log(LogLevel::Error, &format!("Failed to initialize BuliCloud-Core: {error}"));

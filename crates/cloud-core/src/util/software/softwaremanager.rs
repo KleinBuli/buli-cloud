@@ -1,10 +1,12 @@
 use serde::Deserialize;
 use std::{
     collections::HashMap,
-    fs::{self, FileType},
-    io::{Error, ErrorKind},
+    fs::{self},
+    io::Error,
     path::PathBuf,
 };
+
+use crate::logger::logger::{LogLevel::Info, log};
 
 pub struct ServerSoftwareManager {
     download_path: PathBuf,
@@ -32,15 +34,13 @@ impl ServerSoftwareManager {
 
     pub async fn download_paper(&self, minecraft_version: &str) -> Result<(), Error> {
         let file_name = format!("paper-{}.jar", minecraft_version);
+        let file_path = self.download_path.join(file_name);
 
-        let exists = fs::read_dir(&self.download_path)?
-            .filter_map(Result::ok)
-            .any(|entry| entry.file_name().to_string_lossy() == file_name);
-
-        if exists {
+        if file_path.exists() {
             return Ok(());
         }
 
+        log(Info, "Trying to download papermc...");
         let client = reqwest::Client::new();
 
         let builds = client
@@ -48,7 +48,7 @@ impl ServerSoftwareManager {
                 "https://fill.papermc.io/v3/projects/paper/versions/{}/builds",
                 minecraft_version
             ))
-            .header("User-Agent", "BuliCloud/0.1")
+            .header("User-Agent", "BuliCloud/0.1 (https://github.com/KleinBuli/buli-cloud)")
             .send()
             .await
             .map_err(|e| Error::other(e))?
@@ -76,7 +76,8 @@ impl ServerSoftwareManager {
             .await
             .map_err(|e| Error::other(e))?;
 
-        tokio::fs::write(&format!("paper-{}.jar", minecraft_version), bytes).await?;
+        tokio::fs::write(file_path, bytes).await?;
+        log(Info, "Downloaded papermc successfully.");
 
         Ok(())
     }

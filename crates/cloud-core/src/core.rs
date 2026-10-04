@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    config::config_manager::ConfigManager,
     instances::{instance::Instance, instance_manager::InstanceManager},
     templates::template_manager::TemplateManager,
     util::file_utils::copy_dir_all,
@@ -18,6 +19,7 @@ pub struct CloudCore {
     root_path: PathBuf,
     template_manager: TemplateManager,
     instance_manager: InstanceManager,
+    config_manager: ConfigManager,
 }
 
 impl CloudCore {
@@ -28,13 +30,16 @@ impl CloudCore {
     ///
     /// # Returns
     /// * new CloudCore instance
-    pub fn new<P: Into<PathBuf>>(root_path: P) -> Self {
+    pub async fn new<P: Into<PathBuf>>(root_path: P) -> Result<Self, Error> {
         let root_path = root_path.into();
-        Self {
+        let config_manager = ConfigManager::new(root_path.join("config/config.toml")).await?;
+
+        Ok(Self {
             template_manager: TemplateManager::new(root_path.join("templates")),
             instance_manager: InstanceManager::new(root_path.join("running")),
+            config_manager,
             root_path,
-        }
+        })
     }
 
     pub fn template_manager(&self) -> &TemplateManager {
@@ -43,6 +48,10 @@ impl CloudCore {
 
     pub fn instance_manager(&self) -> &InstanceManager {
         &self.instance_manager
+    }
+
+    pub fn config_manager(&self) -> &ConfigManager {
+        &self.config_manager
     }
 
     /// Returns the path to the templates directory
@@ -117,8 +126,8 @@ impl CloudCore {
     /// # Returns
     /// * Result<()>
     pub async fn initialize(&self) -> std::io::Result<()> {
-        fs::create_dir_all(self.templates_path())?;
         fs::create_dir_all(self.config_path())?;
+        fs::create_dir_all(self.templates_path())?;
         fs::create_dir_all(self.static_servers_path())?;
         fs::create_dir_all(self.running_path())?;
         fs::create_dir_all(self.cache_path())?;
