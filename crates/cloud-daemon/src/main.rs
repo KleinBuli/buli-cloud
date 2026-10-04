@@ -11,6 +11,18 @@ use cloud_core::{
 
 #[tokio::main]
 async fn main() {
+    println!(
+        r#"
+  ____        _ _  ____ _                 _
+ | __ ) _   _| (_)/ ___| | ___  _   _  __| |
+ |  _ \| | | | | | |   | |/ _ \| | | |/ _` |
+ | |_) | |_| | | | |___| | (_) | |_| | (_| |
+ |____/ \__,_|_|_|\____|_|\___/ \__,_|\__,_|
+
+                BuliCloud Daemon
+──────────────────────────────────────────────────
+"#
+    );
     log(LogLevel::Info, "Starting BuliCloud daemon...");
 
     let root_path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("data");

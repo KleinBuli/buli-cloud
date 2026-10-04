@@ -27,5 +27,13 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum TemplateCommands {
-    Create { name: String },
+    Create {
+        name: String,
+
+        #[arg(long, conflicts_with = "server")]
+        proxy: bool,
+
+        #[arg(long, conflicts_with = "proxy")]
+        server: bool,
+    },
 }

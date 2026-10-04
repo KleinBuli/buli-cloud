@@ -3,11 +3,13 @@ use std::io::{Error, Write, stdin, stdout};
 use clap::Parser;
 use cloud_core::{
     config::config_manager::ConfigManager,
+    instances::instance::Instance,
     logger::logger::{
-        LogLevel::{self},
+        LogLevel::{self, Info},
         log,
     },
 };
+use reqwest::Client;
 use tokio::process::Command;
 
 use crate::{cli::Cli, setup::run_setup};
@@ -30,13 +32,17 @@ async fn main() -> Result<(), Error> {
     let daemon_path = cli_path.parent().unwrap().join("cloud-daemon.exe");
 
     let mut child = Command::new(daemon_path).spawn()?;
-    run_cli_loop().await?;
+
+    let http_client = reqwest::Client::new();
+    let url = "http://127.0.0.1:8080/";
+
+    run_cli_loop(&http_client, url).await?;
     child.wait().await?;
 
     Ok(())
 }
 
-async fn run_cli_loop() -> Result<(), Error> {
+async fn run_cli_loop(http_client: &Client, url: &str) -> Result<(), Error> {
     loop {
         print!("BuliCloud > ");
         stdout().flush()?;
@@ -52,11 +58,17 @@ async fn run_cli_loop() -> Result<(), Error> {
         let mut args = vec!["bulicloud"];
         args.extend(input.split_whitespace());
         match Cli::try_parse_from(args) {
-            Ok(cli) => {
-                if !parse_commands(cli).await {
-                    break;
+            Ok(cli) => match parse_commands(http_client, url.to_string(), cli).await {
+                Ok(bo) => {
+                    if !bo {
+                        break;
+                    }
                 }
-            }
+                Err(error) => {
+                    log(LogLevel::Error, &format!("{error}"));
+                    continue;
+                }
+            },
             Err(error) => {
                 log(LogLevel::Error, &format!("{error}"));
                 continue;
@@ -67,45 +79,84 @@ async fn run_cli_loop() -> Result<(), Error> {
     Ok(())
 }
 
-async fn parse_commands(cli: Cli) -> bool {
+async fn parse_commands(http_client: &Client, url: String, cli: Cli) -> Result<bool, reqwest::Error> {
     match cli.command {
         Some(command) => match command {
             cli::Commands::Template { command } => match command {
-                cli::TemplateCommands::Create { name } => {
-                    println!("Create template: {}", name);
-                    return true;
+                cli::TemplateCommands::Create { name, proxy, server } => {
+                    let response = http_client.post(format!("{}templates/{}", url, name)).send().await?;
+                    let status = response.status();
+                    let body = response.text().await?;
+
+                    if status.is_success() {
+                        log(Info, &format!("Created Template: {}", name));
+                    } else {
+                        log(
+                            LogLevel::Error,
+                            &format!("Error while creating template {}: {} - {}", name, body, status),
+                        );
+                    }
+                    return Ok(true);
                 }
             },
 
             cli::Commands::Start { template } => {
-                println!("Start template: {}", template);
-                return true;
+                let response = http_client.post(format!("{}instances/new/{}", url, template)).send().await?;
+
+                let status = response.status();
+
+                if !status.is_success() {
+                    let body = response.text().await?;
+                    log(LogLevel::Error, &format!("Error while creating instance: {} - {}", status, body));
+                    return Ok(true);
+                }
+
+                let (id, _) = response.json::<(String, Instance)>().await?;
+
+                log(Info, &format!("Created Instance: {}", id));
+
+                let response = http_client.post(format!("{}instances/{}/start", url, id)).send().await?;
+
+                let status = response.status();
+
+                if status.is_success() {
+                    log(Info, &format!("Started Instance: {}", id));
+                } else {
+                    let body = response.text().await?;
+                    log(
+                        LogLevel::Error,
+                        &format!("Error while starting instance {}: {} - {}", id, status, body),
+                    );
+                }
+
+                Ok(true)
             }
 
             cli::Commands::Stop { template } => {
                 println!("Stop template: {}", template);
-                return true;
+                return Ok(true);
             }
 
             cli::Commands::Copy { instance } => {
                 println!("Copy instance: {}", instance);
-                return true;
+                return Ok(true);
             }
 
             cli::Commands::Shutdown => {
                 println!("Shutdown");
-                return false;
+                return Ok(false);
             }
 
             cli::Commands::Health => {
-                println!("Health");
-                return true;
+                let response = http_client.get(url + "health").send().await?;
+                println!("{}", response.text().await?);
+                return Ok(true);
             }
         },
 
         None => {
             print_help();
-            return true;
+            return Ok(true);
         }
     }
 }

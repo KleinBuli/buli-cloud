@@ -6,7 +6,9 @@ use axum::{
     http::StatusCode,
     routing::{delete, get, post},
 };
-use cloud_core::{CloudCore, instances::instance::Instance, templates::template::Template};
+use cloud_core::{
+    CloudCore, instances::instance::Instance, templates::template::Template, util::software::softwaremanager::ServerSoftware,
+};
 
 async fn health() -> &'static str {
     "BuliCloud is running!"
@@ -26,7 +28,11 @@ async fn templates(State(cloud_core): State<Arc<CloudCore>>) -> Json<Vec<Templat
     Json(cloud_core.template_manager().templates_list().await)
 }
 async fn create_template(State(cloud_core): State<Arc<CloudCore>>, Path(name): Path<String>) -> StatusCode {
-    match cloud_core.template_manager().create_new_template(&name).await {
+    match cloud_core
+        .template_manager()
+        .create_new_template(&name, ServerSoftware::Paper, Some("1.21.11".to_string()))
+        .await
+    {
         Ok(_) => StatusCode::CREATED,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => StatusCode::CONFLICT,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -43,7 +49,7 @@ async fn delete_template(State(cloud_core): State<Arc<CloudCore>>, Path(name): P
 async fn create_instance_from_template(
     State(cloud_core): State<Arc<CloudCore>>,
     Path(template_name): Path<String>,
-) -> Result<(StatusCode, Json<Instance>), StatusCode> {
+) -> Result<(StatusCode, Json<(String, Instance)>), StatusCode> {
     let template = cloud_core
         .template_manager()
         .get_template(&template_name)
@@ -52,11 +58,11 @@ async fn create_instance_from_template(
 
     let instance = cloud_core.instance_manager().create_instance_from_template(template).await;
     cloud_core
-        .prepare_instance(&instance)
+        .prepare_instance_starting(&instance)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    Ok((StatusCode::CREATED, Json(instance)))
+    Ok((StatusCode::CREATED, Json((instance.id().to_string(), instance))))
 }
 
 async fn delete_instance(State(cloud_core): State<Arc<CloudCore>>, Path(id): Path<String>) -> StatusCode {

@@ -6,5 +6,6 @@ license.workspace = true
 
 [dependencies]
 axum = "0.8"
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 cloud-core = { path = "../cloud-core" }

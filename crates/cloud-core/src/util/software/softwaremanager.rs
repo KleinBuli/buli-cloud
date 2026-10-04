@@ -1,8 +1,24 @@
-use serde::Deserialize;
-use std::{collections::HashMap, io::Error, path::PathBuf};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt, io::Error, path::PathBuf};
 
 use crate::logger::logger::{LogLevel::Info, log};
 
+#[derive(Serialize, Clone)]
+pub enum ServerSoftware {
+    Paper,
+    Vanilla,
+    Velocity,
+}
+
+impl fmt::Display for ServerSoftware {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ServerSoftware::Paper => write!(f, "paper"),
+            ServerSoftware::Vanilla => write!(f, "vanilla"),
+            ServerSoftware::Velocity => write!(f, "velocity"),
+        }
+    }
+}
 pub struct ServerSoftwareManager {
     download_path: PathBuf,
 }

@@ -10,7 +10,7 @@ use std::{
 
 use tokio::sync::RwLock;
 
-use crate::templates::template::Template;
+use crate::{templates::template::Template, util::software::softwaremanager::ServerSoftware};
 
 /// Manages all template-related filesystem operations.
 ///
@@ -19,6 +19,7 @@ use crate::templates::template::Template;
 /// templates directory.
 pub struct TemplateManager {
     templates_path: PathBuf,
+    software_path: PathBuf,
     templates: RwLock<HashMap<String, Template>>,
 }
 
@@ -32,9 +33,10 @@ impl TemplateManager {
     /// # Returns
     ///
     /// A new `TemplateManager` instance.
-    pub fn new(templates_path: PathBuf) -> Self {
+    pub fn new(templates_path: PathBuf, software_path: PathBuf) -> Self {
         Self {
             templates_path,
+            software_path,
             templates: RwLock::new(HashMap::new()),
         }
     }
@@ -78,18 +80,33 @@ impl TemplateManager {
     ///
     /// * a template with the same name already exists
     /// * the directory cannot be created
-    pub async fn create_new_template(&self, name: &str) -> Result<(), Error> {
-        let template_path = self.templates_path.join(name);
-
+    pub async fn create_new_template(&self, name: &str, software: ServerSoftware, version: Option<String>) -> Result<(), Error> {
         if self.exists(name) {
             return Err(Error::new(AlreadyExists, format!("The template {name} already exists.")));
         }
 
-        fs::create_dir_all(template_path)?;
-        let template = Template::new(name);
-        let mut templates = self.templates.write().await;
+        let template_path = self.templates_path.join(name);
+        fs::create_dir_all(&template_path)?;
 
-        templates.insert(name.to_string(), template);
+        let software_name = match &version {
+            Some(version) => format!("paper-{version}.jar"),
+            None => "velocity.jar".to_string(),
+        };
+
+        let source_path = self.software_path.join(&software_name);
+        let target_path = template_path.join(&software_name);
+
+        if source_path.exists() {
+            fs::copy(source_path, target_path)?;
+        }
+
+        let template = Template::new(name, software, version);
+
+        {
+            let mut templates = self.templates.write().await;
+            templates.insert(name.to_string(), template);
+        }
+
         Ok(())
     }
 
@@ -158,7 +175,7 @@ impl TemplateManager {
             if path.is_dir() {
                 if let Some(folder_name) = path.file_name() {
                     if let Some(name_str) = folder_name.to_str() {
-                        templates.push(Template::new(name_str));
+                        templates.push(Template::new(name_str, ServerSoftware::Paper, Some("1.21.11".to_string())));
                     }
                 }
             }

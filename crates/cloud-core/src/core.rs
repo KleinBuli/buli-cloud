@@ -2,11 +2,18 @@ use std::{
     fs::{self, remove_dir_all},
     io::Error,
     path::PathBuf,
+    process::Stdio,
+};
+
+use tokio::{
+    io::{AsyncBufReadExt, BufReader},
+    process::Command,
 };
 
 use crate::{
     config::config_manager::ConfigManager,
     instances::{instance::Instance, instance_manager::InstanceManager},
+    logger::logger::{LogLevel::Info, log},
     templates::template_manager::TemplateManager,
     util::{file_utils::copy_dir_all, software::softwaremanager::ServerSoftwareManager},
 };
@@ -36,7 +43,7 @@ impl CloudCore {
         let config_manager = ConfigManager::new(root_path.join("config/config.toml")).await?;
 
         Ok(Self {
-            template_manager: TemplateManager::new(root_path.join("templates")),
+            template_manager: TemplateManager::new(root_path.join("templates"), root_path.join("cache")),
             instance_manager: InstanceManager::new(root_path.join("running")),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache")),
@@ -50,6 +57,10 @@ impl CloudCore {
 
     pub fn instance_manager(&self) -> &InstanceManager {
         &self.instance_manager
+    }
+
+    pub fn server_software_manager(&self) -> &ServerSoftwareManager {
+        &self.server_software_manager
     }
 
     pub fn config_manager(&self) -> &ConfigManager {
@@ -81,7 +92,7 @@ impl CloudCore {
         self.root_path.join("cache")
     }
 
-    pub async fn prepare_instance(&self, instance: &Instance) -> Result<(), std::io::Error> {
+    pub async fn prepare_instance_starting(&self, instance: &Instance) -> Result<(), std::io::Error> {
         match instance.template_name() {
             Some(template_name) => {
                 let template = self
@@ -97,8 +108,35 @@ impl CloudCore {
                     return Err(Error::new(std::io::ErrorKind::AlreadyExists, "Instance directory already exists."));
                 }
 
-                copy_dir_all(template_path, instance_path)?;
+                let instance_software = format!(
+                    "{}-{}.jar",
+                    template.server_software().to_string(),
+                    template.minecraft_version().clone().unwrap()
+                );
 
+                copy_dir_all(template_path, &instance_path)?;
+
+                let mut child = Command::new("java")
+                    .arg("-Dcom.mojang.eula.agree=true")
+                    .arg("-jar")
+                    .arg(&instance_software)
+                    .arg("--nogui")
+                    .current_dir(&instance_path)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()?;
+
+                if let Some(stdout) = child.stdout.take() {
+                    tokio::spawn(async move {
+                        let reader = BufReader::new(stdout);
+                        let mut lines = reader.lines();
+
+                        while let Ok(Some(line)) = lines.next_line().await {
+                            log(Info, &line);
+                        }
+                    });
+                }
                 Ok(())
             }
 

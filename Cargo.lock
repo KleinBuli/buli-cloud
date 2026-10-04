@@ -275,6 +275,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "cloud-core",
+ "serde",
  "tokio",
 ]
 
@@ -287,6 +288,7 @@ dependencies = [
  "cloud-core",
  "dialoguer",
  "regex",
+ "reqwest",
  "tokio",
 ]
 
