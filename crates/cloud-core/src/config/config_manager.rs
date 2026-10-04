@@ -38,7 +38,6 @@ impl ConfigManager {
 
     pub async fn from(config_path: PathBuf, config: Config) -> Result<Self, Error> {
         let config_manager = Self { config_path, config };
-        config_manager.save_config().await?;
         Ok(config_manager)
     }
 
@@ -65,6 +64,10 @@ impl ConfigManager {
     }
 
     pub async fn save_config(&self) -> Result<(), Error> {
+        if let Some(parent) = self.config_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+
         let config_toml = toml::to_string_pretty(&self.config).map_err(std::io::Error::other)?;
         tokio::fs::write(&self.config_path, config_toml).await?;
         log(Info, "config.toml was saved.");

@@ -8,7 +8,7 @@ use crate::{
     config::config_manager::ConfigManager,
     instances::{instance::Instance, instance_manager::InstanceManager},
     templates::template_manager::TemplateManager,
-    util::file_utils::copy_dir_all,
+    util::{file_utils::copy_dir_all, software::softwaremanager::ServerSoftwareManager},
 };
 
 /// Central runtime core of BuliCloud.
@@ -20,6 +20,7 @@ pub struct CloudCore {
     template_manager: TemplateManager,
     instance_manager: InstanceManager,
     config_manager: ConfigManager,
+    server_software_manager: ServerSoftwareManager,
 }
 
 impl CloudCore {
@@ -38,6 +39,7 @@ impl CloudCore {
             template_manager: TemplateManager::new(root_path.join("templates")),
             instance_manager: InstanceManager::new(root_path.join("running")),
             config_manager,
+            server_software_manager: ServerSoftwareManager::new(root_path.join("cache")),
             root_path,
         })
     }
@@ -132,6 +134,8 @@ impl CloudCore {
         fs::create_dir_all(self.running_path())?;
         fs::create_dir_all(self.cache_path())?;
 
+        let version = self.config_manager.config().fallback_minecraft_version();
+        self.server_software_manager.ensure_paper_available(version).await?;
         self.template_manager().load_templates().await?;
         Ok(())
     }

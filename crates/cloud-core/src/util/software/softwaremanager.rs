@@ -1,10 +1,5 @@
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    fs::{self},
-    io::Error,
-    path::PathBuf,
-};
+use std::{collections::HashMap, io::Error, path::PathBuf};
 
 use crate::logger::logger::{LogLevel::Info, log};
 
@@ -32,15 +27,18 @@ impl ServerSoftwareManager {
         &self.download_path
     }
 
-    pub async fn download_paper(&self, minecraft_version: &str) -> Result<(), Error> {
+    pub async fn ensure_paper_available(&self, minecraft_version: &str) -> Result<(), Error> {
+        log(Info, "Checking cached PaperMC .jar...");
+
         let file_name = format!("paper-{}.jar", minecraft_version);
         let file_path = self.download_path.join(file_name);
 
         if file_path.exists() {
+            log(Info, "PaperMC Jar already cached and ready-to-start.");
             return Ok(());
         }
 
-        log(Info, "Trying to download papermc...");
+        log(Info, "No fallback .jar found. Trying to download papermc...");
         let client = reqwest::Client::new();
 
         let builds = client

@@ -13,7 +13,9 @@ use cloud_core::{
 async fn main() {
     log(LogLevel::Info, "Starting BuliCloud daemon...");
 
-    let core = match CloudCore::new("./bulicloud").await {
+    let root_path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("data");
+
+    let core = match CloudCore::new(root_path).await {
         Ok(core) => core,
         Err(error) => {
             log(Error, &format!("Error to create BuliCloud-Core: {error}"));
