@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/bulicloud.png" width="600" alt="BuliCloud Logo">
+  <img src="bulicloud.png" width="600" alt="BuliCloud Logo">
 </p>
 
 # ⛅ BuliCloud
