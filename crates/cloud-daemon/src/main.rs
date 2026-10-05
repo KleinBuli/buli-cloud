@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{io::Write, sync::Arc};
 
 use cloud_api::http::http_server::start_http_server;
 use cloud_core::{
@@ -11,6 +11,8 @@ use cloud_core::{
 
 #[tokio::main]
 async fn main() {
+    print!("\x1B[2J\x1B[1;1H");
+    let _ = std::io::stdout().flush();
     println!(
         r#"
   ____        _ _  ____ _                 _
@@ -45,11 +47,12 @@ async fn main() {
     log(LogLevel::Info, "BuliCloud-Core initialized");
     log(LogLevel::Info, "BuliCloud daemon is running");
 
-    tokio::spawn(async move {
+    let server_core = Arc::clone(&core);
+    let server_task = tokio::spawn(async move {
         log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");
         log(LogLevel::Info, "HTTP Server is running");
 
-        if let Err(error) = start_http_server(Arc::clone(&core)).await {
+        if let Err(error) = start_http_server(server_core).await {
             log(LogLevel::Error, &format!("failed starting http server: {}", error));
         }
     });
@@ -60,4 +63,8 @@ async fn main() {
     }
     log(LogLevel::Info, "Shutdown signal received");
     log(LogLevel::Info, "Stopping BuliCloud daemon...");
+    if let Err(error) = core.shutdown().await {
+        log(LogLevel::Error, &format!("Could not stop all instances: {error}"));
+    }
+    server_task.abort();
 }

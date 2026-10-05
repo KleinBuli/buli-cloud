@@ -1,8 +1,8 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::util::software::softwaremanager::ServerSoftware;
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Template {
     name: String,
     server_software: ServerSoftware,
@@ -20,6 +20,20 @@ impl Clone for Template {
 }
 
 impl Template {
+    pub fn jar_name(&self) -> std::io::Result<String> {
+        use std::io::{Error, ErrorKind};
+        match self.server_software {
+            ServerSoftware::Velocity => Ok("velocity.jar".to_string()),
+            _ => {
+                let version = self
+                    .minecraft_version
+                    .as_deref()
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Minecraft version is required"))?;
+                crate::util::file_utils::validate_name(version)?;
+                Ok(format!("{}-{version}.jar", self.server_software))
+            }
+        }
+    }
     pub fn new(name: &str, server_software: ServerSoftware, minecraft_version: Option<String>) -> Self {
         Self {
             name: String::from(name),

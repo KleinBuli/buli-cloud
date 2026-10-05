@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt, io::Error, path::PathBuf};
 
 use crate::logger::logger::{LogLevel::Info, log};
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ServerSoftware {
     Paper,
     Vanilla,

@@ -82,9 +82,42 @@ async fn run_cli_loop(http_client: &Client, url: &str) -> Result<(), Error> {
 async fn parse_commands(http_client: &Client, url: String, cli: Cli) -> Result<bool, reqwest::Error> {
     match cli.command {
         Some(command) => match command {
+            cli::Commands::Group { command } => match command {
+                cli::GroupCommands::Create { name } => {
+                    let response = http_client.post(format!("{}groups/{}", url, name)).send().await?;
+                    let status = response.status();
+                    let body = response.text().await?;
+
+                    if status.is_success() {
+                        log(Info, &format!("Group {} created successfully", name));
+                    } else {
+                        log(
+                            LogLevel::Error,
+                            &format!("Error while creating group {}: {} - {}", name, body, status),
+                        );
+                    }
+
+                    return Ok(true);
+                }
+            },
+
             cli::Commands::Template { command } => match command {
-                cli::TemplateCommands::Create { name, proxy, server } => {
-                    let response = http_client.post(format!("{}templates/{}", url, name)).send().await?;
+                cli::TemplateCommands::Create {
+                    group,
+                    name,
+                    proxy,
+                    server: _,
+                } => {
+                    let response = http_client
+                        .post(format!(
+                            "{}templates/{}/{}?software={}",
+                            url,
+                            group,
+                            name,
+                            if proxy { "Velocity" } else { "Paper" }
+                        ))
+                        .send()
+                        .await?;
                     let status = response.status();
                     let body = response.text().await?;
 
@@ -100,8 +133,11 @@ async fn parse_commands(http_client: &Client, url: String, cli: Cli) -> Result<b
                 }
             },
 
-            cli::Commands::Start { template } => {
-                let response = http_client.post(format!("{}instances/new/{}", url, template)).send().await?;
+            cli::Commands::Start { group, template } => {
+                let response = http_client
+                    .post(format!("{}instances/new/{}/{}", url, group, template))
+                    .send()
+                    .await?;
 
                 let status = response.status();
 
@@ -166,12 +202,13 @@ fn print_help() {
         r#"
 BuliCloud Commands
 
-  template create <name>      Create a new template
-  start <template_name>       Start an instance from a template
-  stop <instance_name>        Stop a running instance
-  copy <instance_name>        Copy an instance
-  shutdown                    Stop the BuliCloud daemon
-  health                      Check daemon health
+  group create <name>              Create a new group            
+  template create <group> <name>   Create a new template
+  start <group> <template_name>    Start an instance from a template
+  stop <instance_name>             Stop a running instance
+  copy <instance_name>             Copy an instance
+  shutdown                         Stop the BuliCloud daemon
+  health                           Check daemon health
 "#
     );
 }

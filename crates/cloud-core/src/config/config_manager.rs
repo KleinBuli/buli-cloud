@@ -27,6 +27,7 @@ impl ConfigManager {
             };
 
             log(Warn, "config.toml not found. Creating default configuration.");
+            config_manager.save_config().await?;
             return Ok(config_manager);
         }
 
@@ -69,7 +70,7 @@ impl ConfigManager {
         }
 
         let config_toml = toml::to_string_pretty(&self.config).map_err(std::io::Error::other)?;
-        tokio::fs::write(&self.config_path, config_toml).await?;
+        crate::util::file_utils::atomic_write(&self.config_path, config_toml.as_bytes())?;
         log(Info, "config.toml was saved.");
         Ok(())
     }

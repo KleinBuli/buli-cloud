@@ -276,7 +276,9 @@ dependencies = [
  "axum",
  "cloud-core",
  "serde",
+ "tempfile",
  "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -299,6 +301,7 @@ dependencies = [
  "chrono",
  "reqwest",
  "serde",
+ "tempfile",
  "tokio",
  "toml",
 ]

@@ -9,6 +9,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     Start {
+        group: String,
         template: String,
     },
     Stop {
@@ -23,11 +24,17 @@ pub enum Commands {
         #[command(subcommand)]
         command: TemplateCommands,
     },
+
+    Group {
+        #[command(subcommand)]
+        command: GroupCommands,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum TemplateCommands {
     Create {
+        group: String,
         name: String,
 
         #[arg(long, conflicts_with = "server")]
@@ -36,4 +43,10 @@ pub enum TemplateCommands {
         #[arg(long, conflicts_with = "proxy")]
         server: bool,
     },
+}
+
+// group create <name>
+#[derive(Subcommand)]
+pub enum GroupCommands {
+    Create { name: String },
 }

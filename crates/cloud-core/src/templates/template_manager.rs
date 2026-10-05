@@ -1,38 +1,27 @@
+use crate::{
+    templates::template::Template,
+    util::{
+        file_utils::{atomic_write, validate_name},
+        software::softwaremanager::ServerSoftware,
+    },
+};
 use std::{
     collections::HashMap,
     fs,
-    io::{
-        Error,
-        ErrorKind::{AlreadyExists, NotFound},
-    },
-    path::PathBuf,
+    io::{Error, ErrorKind},
+    path::{Path, PathBuf},
 };
-
 use tokio::sync::RwLock;
 
-use crate::{templates::template::Template, util::software::softwaremanager::ServerSoftware};
+pub const TEMPLATE_CONFIG: &str = ".templates.toml";
 
-/// Manages all template-related filesystem operations.
-///
-/// The `TemplateManager` is responsible for creating, deleting,
-/// listing and locating server templates inside the configured
-/// templates directory.
 pub struct TemplateManager {
     templates_path: PathBuf,
     software_path: PathBuf,
-    templates: RwLock<HashMap<String, Template>>,
+    templates: RwLock<HashMap<(String, String), Template>>,
 }
 
 impl TemplateManager {
-    /// Creates a new `TemplateManager`.
-    ///
-    /// # Arguments
-    ///
-    /// * `templates_path` - The directory in which all templates are stored.
-    ///
-    /// # Returns
-    ///
-    /// A new `TemplateManager` instance.
     pub fn new(templates_path: PathBuf, software_path: PathBuf) -> Self {
         Self {
             templates_path,
@@ -41,178 +30,164 @@ impl TemplateManager {
         }
     }
 
-    /// Reads all templates from the disk and puts them into the HashMap.
-    ///
-    /// # Errors
-    /// throws an error if an error occurs while reading the templates from the disk
-    pub async fn load_templates(&self) -> Result<(), Error> {
-        let templates = self.templates_list_from_disk()?;
-        let mut cache = self.templates.write().await;
-
-        cache.clear();
-
-        for template in templates {
-            cache.insert(template.name().to_string(), template);
-        }
-
-        Ok(())
-    }
-
-    /// Returns the root directory in which templates are stored.
-    ///
-    /// # Returns
-    ///
-    /// A copy of the configured templates path.
     pub fn templates_path(&self) -> PathBuf {
-        self.templates_path.to_path_buf()
+        self.templates_path.clone()
     }
 
-    /// The template will be created as a subdirectory of the configured
-    /// templates directory.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the template to create.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * a template with the same name already exists
-    /// * the directory cannot be created
-    pub async fn create_new_template(&self, name: &str, software: ServerSoftware, version: Option<String>) -> Result<(), Error> {
-        if self.exists(name) {
-            return Err(Error::new(AlreadyExists, format!("The template {name} already exists.")));
+    pub(crate) fn checked_path(&self, group: &str, name: &str) -> Result<PathBuf, Error> {
+        validate_name(group)?;
+        validate_name(name)?;
+        let group_path = self.templates_path.join(group);
+        let path = group_path.join(name);
+        for candidate in [&group_path, &path] {
+            if candidate.exists() && !candidate.canonicalize()?.starts_with(self.templates_path.canonicalize()?) {
+                return Err(Error::new(ErrorKind::InvalidInput, "Template path escapes template root"));
+            }
+            if let Ok(metadata) = fs::symlink_metadata(candidate)
+                && metadata.file_type().is_symlink()
+            {
+                return Err(Error::new(ErrorKind::InvalidInput, "Linked template directories are not supported"));
+            }
         }
-
-        let template_path = self.templates_path.join(name);
-        fs::create_dir_all(&template_path)?;
-
-        let software_name = match &version {
-            Some(version) => format!("paper-{version}.jar"),
-            None => "velocity.jar".to_string(),
-        };
-
-        let source_path = self.software_path.join(&software_name);
-        let target_path = template_path.join(&software_name);
-
-        if source_path.exists() {
-            fs::copy(source_path, target_path)?;
-        }
-
-        let template = Template::new(name, software, version);
-
-        {
-            let mut templates = self.templates.write().await;
-            templates.insert(name.to_string(), template);
-        }
-
-        Ok(())
+        Ok(path)
     }
 
-    /// Deletes an existing template and all of its contents.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the template to delete.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    ///
-    /// * the template does not exist
-    /// * the template directory cannot be removed
-    pub async fn delete_template(&self, name: &str) -> Result<(), Error> {
-        let template_path = self.templates_path.join(name);
-        if !self.exists(name) {
-            return Err(Error::new(NotFound, format!("The template {name} doesn't exist.")));
-        }
-
-        fs::remove_dir_all(template_path)?;
-        let mut templates = self.templates.write().await;
-
-        templates.remove(name);
-        Ok(())
-    }
-
-    /// Returns the filesystem path of a template.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the template.
-    ///
-    /// # Returns
-    ///
-    /// `Some(PathBuf)` if the template exists, otherwise `None`.
-    pub fn get_template_path(&self, name: &str) -> Option<PathBuf> {
-        if !self.exists(name) {
-            return None;
-        }
-
-        Some(self.templates_path.join(name))
-    }
-
-    /// Lists all available templates.
-    ///
-    /// Only directories inside the configured templates directory
-    /// are treated as templates.
-    ///
-    /// The returned template names are sorted alphabetically.
-    ///
-    /// # Returns
-    ///
-    /// A vector containing the names of all available templates.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the templates directory cannot be read
-    /// or one of its directory entries cannot be accessed.
-    pub fn templates_list_from_disk(&self) -> Result<Vec<Template>, Error> {
-        let mut templates: Vec<Template> = Vec::new();
-        for entry in fs::read_dir(&self.templates_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(folder_name) = path.file_name() {
-                    if let Some(name_str) = folder_name.to_str() {
-                        templates.push(Template::new(name_str, ServerSoftware::Paper, Some("1.21.11".to_string())));
+    fn read_template(&self, path: &Path, name: &str, global_version: &str) -> Result<Template, Error> {
+        let config = path.join(TEMPLATE_CONFIG);
+        let template = if config.exists() {
+            toml::from_str::<Template>(&fs::read_to_string(&config)?).map_err(Error::other)?
+        } else {
+            // Migrate old templates only when their executable identifies software/version unambiguously.
+            let mut candidates = Vec::new();
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_file() {
+                    continue;
+                }
+                let file_name = entry.file_name();
+                let file_name = file_name.to_string_lossy();
+                if file_name == "velocity.jar" {
+                    candidates.push(Template::new(name, ServerSoftware::Velocity, None));
+                }
+                for (prefix, software) in [("paper-", ServerSoftware::Paper), ("vanilla-", ServerSoftware::Vanilla)] {
+                    if let Some(version) = file_name.strip_prefix(prefix).and_then(|s| s.strip_suffix(".jar")) {
+                        candidates.push(Template::new(name, software, Some(version.to_string())));
                     }
                 }
             }
+            let template = match candidates.len() {
+                1 => candidates.remove(0),
+                0 if name == "global" => {
+                    let template = Template::new(name, ServerSoftware::Paper, Some(global_version.to_string()));
+                    let jar = template.jar_name()?;
+                    fs::copy(self.software_path.join(&jar), path.join(&jar))?;
+                    template
+                }
+                _ => {
+                    return Err(Error::new(
+                        ErrorKind::InvalidData,
+                        format!("Cannot infer software/version for {}. Add {TEMPLATE_CONFIG}.", path.display()),
+                    ));
+                }
+            };
+            atomic_write(&config, toml::to_string_pretty(&template).map_err(Error::other)?.as_bytes())?;
+            template
+        };
+        if template.name() != name {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                "Template metadata name does not match directory",
+            ));
         }
-        templates.sort_by(|a, b| a.name().cmp(b.name()));
-        Ok(templates)
+        if !path.join(template.jar_name()?).is_file() {
+            return Err(Error::new(ErrorKind::NotFound, format!("Executable missing in {}", path.display())));
+        }
+        Ok(template)
     }
 
-    /// Returns all currently loaded templates.
-    ///
-    /// Templates are read from the in-memory cache and sorted
-    /// alphabetically by name.
-    ///
-    /// # Returns
-    ///
-    /// A vector containing all loaded templates.
-    pub async fn templates_list(&self) -> Vec<Template> {
+    pub(crate) async fn load_group_templates(&self, group: &str, names: &[String], global_version: &str) -> Result<(), Error> {
+        let mut templates = self.templates.write().await;
+        let mut loaded = Vec::new();
+        for name in names {
+            if loaded
+                .iter()
+                .any(|((_, existing), _): &((String, String), Template)| existing.eq_ignore_ascii_case(name))
+            {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    "Template names must be unique regardless of case",
+                ));
+            }
+            let path = self.checked_path(group, name)?;
+            loaded.push(((group.to_string(), name.clone()), self.read_template(&path, name, global_version)?));
+        }
+        templates.retain(|(g, _), _| g != group);
+        templates.extend(loaded);
+        Ok(())
+    }
+
+    pub(crate) async fn create_new_template(
+        &self,
+        group: &str,
+        name: &str,
+        software: ServerSoftware,
+        version: Option<String>,
+    ) -> Result<(), Error> {
+        let mut templates = self.templates.write().await;
+        let path = self.checked_path(group, name)?;
+        if path.exists() || templates.keys().any(|(g, n)| g == group && n.eq_ignore_ascii_case(name)) {
+            return Err(Error::new(ErrorKind::AlreadyExists, "Template already exists"));
+        }
+        let template = Template::new(name, software, version);
+        let jar = template.jar_name()?;
+        let source = self.software_path.join(&jar);
+        if !source.is_file() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("Server software is not cached: {}", source.display()),
+            ));
+        }
+        let parent = path.parent().unwrap();
+        fs::create_dir_all(parent)?;
+        let staged = tempfile::Builder::new().prefix(".creating-").tempdir_in(parent)?;
+        fs::copy(source, staged.path().join(&jar))?;
+        atomic_write(
+            &staged.path().join(TEMPLATE_CONFIG),
+            toml::to_string_pretty(&template).map_err(Error::other)?.as_bytes(),
+        )?;
+        fs::rename(staged.path(), &path)?;
+        templates.insert((group.to_string(), name.to_string()), template);
+        Ok(())
+    }
+
+    pub(crate) async fn forget_template(&self, group: &str, name: &str) {
+        self.templates.write().await.remove(&(group.to_string(), name.to_string()));
+    }
+
+    pub(crate) async fn forget_group(&self, group: &str) {
+        self.templates.write().await.retain(|(g, _), _| g != group);
+    }
+
+    pub fn get_template_path(&self, group: &str, name: &str) -> Option<PathBuf> {
+        self.checked_path(group, name).ok().filter(|path| path.is_dir())
+    }
+
+    pub async fn templates_list(&self, group: &str) -> Vec<Template> {
         let templates = self.templates.read().await;
-        templates.values().cloned().collect()
+        let mut result: Vec<_> = templates.iter().filter(|((g, _), _)| g == group).map(|(_, t)| t.clone()).collect();
+        result.sort_by(|a, b| a.name().cmp(b.name()));
+        result
     }
 
-    pub async fn get_template(&self, name: &str) -> Option<Template> {
-        let templates = self.templates.read().await;
-
-        templates.get(name).cloned()
+    pub async fn all_templates(&self) -> Vec<Template> {
+        self.templates.read().await.values().cloned().collect()
     }
 
-    /// Checks whether a template with the given name exists.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The name of the template to check.
-    ///
-    /// # Returns
-    ///
-    /// `true` if the template path exists, otherwise `false`.
-    pub fn exists(&self, name: &str) -> bool {
-        self.templates_path.join(name).exists()
+    pub async fn get_template(&self, group: &str, name: &str) -> Option<Template> {
+        self.templates.read().await.get(&(group.to_string(), name.to_string())).cloned()
+    }
+
+    pub fn exists(&self, group: &str, name: &str) -> bool {
+        self.get_template_path(group, name).is_some()
     }
 }
