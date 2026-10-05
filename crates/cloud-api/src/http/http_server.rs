@@ -164,7 +164,7 @@ pub fn router(core: Arc<CloudCore>) -> Router {
 }
 
 pub async fn start_http_server(core: Arc<CloudCore>) -> std::io::Result<()> {
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     axum::serve(listener, router(core)).await.map_err(Error::other)
 }
 

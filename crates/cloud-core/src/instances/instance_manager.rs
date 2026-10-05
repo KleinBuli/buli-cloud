@@ -1,5 +1,8 @@
 use crate::{
-    instances::instance::{Instance, InstanceStatus},
+    instances::{
+        instance::{Instance, InstanceStatus},
+        port_allocator::PortAllocator,
+    },
     logger::logger::{LogLevel, log},
     templates::template::Template,
     util::{file_utils::validate_name, software::softwaremanager::ServerSoftware},
@@ -28,6 +31,7 @@ struct ManagedInstance {
 pub struct InstanceManager {
     running_path: PathBuf,
     state: Arc<Mutex<HashMap<String, ManagedInstance>>>,
+    port_allocator: PortAllocator,
 }
 
 impl InstanceManager {
@@ -35,6 +39,7 @@ impl InstanceManager {
         Self {
             running_path,
             state: Arc::new(Mutex::new(HashMap::new())),
+            port_allocator: PortAllocator::new(),
         }
     }
 
@@ -226,5 +231,9 @@ impl InstanceManager {
             }
         }
         failure.map_or(Ok(()), Err)
+    }
+
+    pub fn port_allocator(&self) -> &PortAllocator {
+        &self.port_allocator
     }
 }

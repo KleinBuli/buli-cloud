@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 
-pub const TEMPLATE_CONFIG: &str = ".templates.toml";
+pub const TEMPLATE_CONFIG: &str = ".template.toml";
 
 pub struct TemplateManager {
     templates_path: PathBuf,
@@ -57,7 +57,6 @@ impl TemplateManager {
         let template = if config.exists() {
             toml::from_str::<Template>(&fs::read_to_string(&config)?).map_err(Error::other)?
         } else {
-            // Migrate old templates only when their executable identifies software/version unambiguously.
             let mut candidates = Vec::new();
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
