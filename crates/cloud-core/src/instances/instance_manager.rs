@@ -4,8 +4,9 @@ use crate::{
         instance_runtime::{InstanceInfo, InstanceRuntime, InstanceStatus},
         port_allocator::PortAllocator,
     },
+    logger::logger::{LogLevel, log},
     templates::template::Template,
-    util::file_utils::validate_name,
+    util::file_utils::{set_server_property, validate_name},
 };
 use std::{
     collections::HashMap,
@@ -13,7 +14,7 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast::error};
 
 /// Dynamic instances belong to this daemon's lifetime. Existing directories are never reused implicitly.
 pub struct InstanceManager {
@@ -78,7 +79,36 @@ impl InstanceManager {
             .get_mut(id)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
 
-        runtime.start(&self.running_path)
+        if runtime.status() != InstanceStatus::Stopped {
+            return Ok(());
+        }
+
+        let port = self.set_port(id).await?;
+
+        if let Err(error) = runtime.start(&self.running_path) {
+            if let Err(cleanup_error) = self.port_allocator().deallocate(port).await {
+                log(LogLevel::Error, &format!("Failed to deallocate port {port}: {cleanup_error}"));
+            }
+
+            return Err(error);
+        }
+
+        Ok(())
+    }
+
+    async fn set_port(&self, id: &str) -> Result<u16, Error> {
+        let port = self.port_allocator.allocate_next(id).await?;
+        let properties_path = self.running_path.join(id).join("server.properties");
+
+        if let Err(error) = set_server_property(&properties_path, "server-port", &port.to_string()) {
+            if let Err(cleanup_error) = self.port_allocator().deallocate(port).await {
+                log(LogLevel::Error, &format!("Failed to deallocate port {port}: {cleanup_error}"));
+            }
+
+            return Err(error);
+        }
+
+        Ok(port)
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {
@@ -87,7 +117,14 @@ impl InstanceManager {
             .get_mut(id)
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
 
-        runtime.stop().await
+        let port = self.port_allocator().get_corresponding_port(runtime.info().instance().id()).await;
+        runtime.stop().await?;
+
+        if let Some(port) = port {
+            self.port_allocator().deallocate(port).await?;
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {

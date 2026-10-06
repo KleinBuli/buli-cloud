@@ -7,9 +7,6 @@ pub struct Config {
     fallback_minecraft_version: String,
     http_ip: String,
     http_port: i32,
-
-    server_port_range: (i32, i32),
-    proxy_port_range: (i32, i32),
 }
 
 impl Default for Config {
@@ -20,9 +17,6 @@ impl Default for Config {
             fallback_minecraft_version: String::from("1.21.11"),
             http_ip: String::from("127.0.0.1"),
             http_port: 8080,
-
-            proxy_port_range: (25565, 27555),
-            server_port_range: (35565, 37565),
         }
     }
 }
@@ -44,14 +38,6 @@ impl Config {
 
     pub fn http_port(&self) -> &i32 {
         &self.http_port
-    }
-
-    pub fn server_port_range(&self) -> (i32, i32) {
-        self.server_port_range
-    }
-
-    pub fn proxy_port_range(&self) -> (i32, i32) {
-        self.server_port_range
     }
 
     pub fn set_server_software(&mut self, server_software: &str) {

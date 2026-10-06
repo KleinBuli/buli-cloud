@@ -100,3 +100,28 @@ pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Re
 
     Ok(())
 }
+
+pub fn set_server_property(properties_path: &Path, key: &str, value: &str) -> Result<(), Error> {
+    if !properties_path.exists() || properties_path.file_name().unwrap() != "server.properties" {
+        return Err(Error::new(ErrorKind::NotFound, "Path is not a server.properties file"));
+    }
+
+    let content = fs::read_to_string(properties_path)?;
+    let target = format!("{key}=");
+
+    let mut found = false;
+
+    let lines = content
+        .lines()
+        .map(|line| {
+            if line.starts_with(&target) {
+                found = true;
+                format!("{key}={value}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    fs::write(properties_path, lines.join("\n"))?;
+    Ok(())
+}
