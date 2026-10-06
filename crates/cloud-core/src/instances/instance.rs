@@ -5,7 +5,6 @@ pub struct Instance {
     id: String,
     group_name: String,
     template_name: Option<String>,
-    status: InstanceStatus,
 }
 
 impl Instance {
@@ -14,7 +13,6 @@ impl Instance {
             id: id.to_string(),
             template_name,
             group_name: group_name.to_string(),
-            status: InstanceStatus::Stopped,
         }
     }
 
@@ -29,20 +27,4 @@ impl Instance {
     pub fn template_name(&self) -> Option<&str> {
         self.template_name.as_deref()
     }
-
-    pub fn status(&self) -> &InstanceStatus {
-        &self.status
-    }
-
-    pub fn set_status(&mut self, status: InstanceStatus) {
-        self.status = status
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum InstanceStatus {
-    Starting,
-    Running,
-    Stopping,
-    Stopped,
 }

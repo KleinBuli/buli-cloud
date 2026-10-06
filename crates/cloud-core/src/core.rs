@@ -155,7 +155,7 @@ impl CloudCore {
                 .instances_list()
                 .await
                 .iter()
-                .any(|instance| instance.group_name() == name)
+                .any(|instance| instance.instance().group_name() == name)
         {
             return Err(Error::new(
                 ErrorKind::ResourceBusy,
@@ -216,7 +216,7 @@ impl CloudCore {
             .instances_list()
             .await
             .iter()
-            .any(|instance| instance.group_name() == group && instance.template_name() == Some(name))
+            .any(|instance| instance.instance().group_name() == group && instance.instance().template_name() == Some(name))
         {
             return Err(Error::new(ErrorKind::ResourceBusy, "Template is used by an instance"));
         }
@@ -278,7 +278,7 @@ impl CloudCore {
             .get_instance(id)
             .await
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
-        if self.require_group(instance.group_name()).await?.maintenance() {
+        if self.require_group(instance.instance().group_name()).await?.maintenance() {
             return Err(Error::new(ErrorKind::ResourceBusy, "Group is in maintenance"));
         }
         self.instance_manager.start_instance(id).await
