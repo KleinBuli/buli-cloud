@@ -7,7 +7,7 @@ use axum::{
 use cloud_core::{
     CloudCore,
     groups::group::Group,
-    instances::instance::Instance,
+    instances::{instance::Instance, instance_runtime::InstanceInfo},
     logger::logger::{LogLevel, log},
     util::software::softwaremanager::ServerSoftware,
 };
@@ -98,7 +98,7 @@ async fn delete_instance(State(core): State<Arc<CloudCore>>, Path(id): Path<Stri
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn instances(State(core): State<Arc<CloudCore>>) -> Json<Vec<Instance>> {
+async fn instances(State(core): State<Arc<CloudCore>>) -> Json<Vec<InstanceInfo>> {
     Json(core.instance_manager().instances_list().await)
 }
 
