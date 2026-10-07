@@ -328,6 +328,28 @@ impl CloudCore {
         Ok(())
     }
 
+    pub async fn cleanup_running_directory(&self) -> Result<(), Error> {
+        if !self.running_path().exists() {
+            tokio::fs::create_dir_all(&self.running_path()).await?;
+            return Ok(());
+        }
+
+        let mut entries = tokio::fs::read_dir(&self.running_path()).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            let metadata = tokio::fs::symlink_metadata(&path).await?;
+
+            if metadata.is_dir() {
+                tokio::fs::remove_dir_all(&path).await?;
+            } else {
+                tokio::fs::remove_file(&path).await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn initialize(&self) -> Result<(), Error> {
         let mut operation = self.operations.lock().await;
         if operation.shutting_down {
@@ -336,6 +358,8 @@ impl CloudCore {
         if operation.initialized {
             return Ok(());
         }
+
+        self.cleanup_running_directory().await?;
         for path in [
             self.config_path(),
             self.templates_path(),
@@ -371,6 +395,8 @@ impl CloudCore {
     pub async fn shutdown(&self) -> Result<(), Error> {
         let mut operation = self.operations.lock().await;
         operation.shutting_down = true;
-        self.instance_manager.shutdown().await
+        self.instance_manager.shutdown().await?;
+        // self.cleanup_running_directory().await?; TODO:  fix race condition
+        Ok(())
     }
 }

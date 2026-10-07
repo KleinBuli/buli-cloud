@@ -18,6 +18,11 @@ pub enum Commands {
     Copy {
         instance: String,
     },
+
+    Console {
+        instance: String,
+    },
+
     Shutdown,
     Health,
     Template {

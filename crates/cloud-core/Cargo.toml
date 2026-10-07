@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 chrono = "0.4.45"
+axum = { version = "0.8", features = ["ws"]}
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
 reqwest = { version = "0.13", features = ["json"] }

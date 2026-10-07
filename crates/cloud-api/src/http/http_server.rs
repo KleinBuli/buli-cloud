@@ -1,13 +1,14 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, WebSocketUpgrade},
     http::StatusCode,
+    response::Response,
     routing::{delete, get, post},
 };
 use cloud_core::{
     CloudCore,
     groups::group::Group,
-    instances::{instance::Instance, instance_runtime::InstanceInfo},
+    instances::{instance::Instance, instance_manager::InstanceManager, instance_runtime::InstanceInfo},
     logger::logger::{LogLevel, log},
     util::software::softwaremanager::ServerSoftware,
 };
@@ -112,6 +113,10 @@ async fn stop_instance(State(core): State<Arc<CloudCore>>, Path(id): Path<String
     Ok(StatusCode::OK)
 }
 
+async fn instance_console(State(core): State<Arc<CloudCore>>, Path(id): Path<String>, web_socket: WebSocketUpgrade) -> Response {
+    web_socket.on_upgrade(move |socket| InstanceManager::handle_instance_console(socket, core, id))
+}
+
 async fn groups(State(core): State<Arc<CloudCore>>) -> Json<Vec<Group>> {
     Json(core.group_manager().groups().await)
 }
@@ -160,6 +165,7 @@ pub fn router(core: Arc<CloudCore>) -> Router {
         .route("/instances/{id}/remove", delete(delete_instance))
         .route("/instances/{id}/start", post(start_instance))
         .route("/instances/{id}/stop", post(stop_instance))
+        .route("/instances/{id}/console", get(instance_console))
         .with_state(core)
 }
 

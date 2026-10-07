@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
-    sync::mpsc,
+    sync::{broadcast, mpsc},
 };
 
 use crate::{
@@ -26,6 +26,7 @@ pub(crate) struct InstanceRuntime {
     command_tx: Option<mpsc::Sender<RuntimeCommand>>,
     event_tx: mpsc::Sender<RuntimeEvent>,
     status: Arc<RwLock<InstanceStatus>>,
+    console_tx: broadcast::Sender<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,12 +59,14 @@ pub enum InstanceStatus {
 
 impl InstanceRuntime {
     pub(crate) fn new(instance: Instance, template: Template, event_tx: mpsc::Sender<RuntimeEvent>) -> Self {
+        let (console_tx, _) = broadcast::channel(256);
         Self {
             instance,
             template,
             event_tx,
             command_tx: None,
             status: Arc::new(RwLock::new(Stopped)),
+            console_tx,
         }
     }
 
@@ -88,6 +91,10 @@ impl InstanceRuntime {
 
     pub(crate) fn set_status(&mut self, status: InstanceStatus) {
         *self.status.write().unwrap() = status.clone();
+    }
+
+    pub fn subscribe_console(&self) -> broadcast::Receiver<String> {
+        self.console_tx.subscribe()
     }
 
     pub(crate) fn start(&mut self, running_path: &Path) -> Result<(), Error> {
@@ -167,11 +174,11 @@ impl InstanceRuntime {
         };
 
         if let Some(stdout) = child.stdout.take() {
-            Self::spawn_stdout_logger(stdout, self.instance.id().to_string());
+            Self::spawn_stdout_logger(&self, stdout);
         }
 
         if let Some(stderr) = child.stderr.take() {
-            Self::spawn_stderr_logger(stderr, self.instance.id().to_string());
+            Self::spawn_stderr_logger(&self, stderr);
         }
 
         let id = self.instance.id().to_string();
@@ -192,24 +199,40 @@ impl InstanceRuntime {
         Ok(())
     }
 
-    fn spawn_stdout_logger(stdout: ChildStdout, id: String) {
+    fn spawn_stdout_logger(&self, stdout: ChildStdout) {
+        let console_tx = self.console_tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                log(LogLevel::Info, &format!("[{id}] {line}"));
+                let _ = console_tx.send(line);
             }
         });
     }
 
-    fn spawn_stderr_logger(stderr: ChildStderr, id: String) {
+    fn spawn_stderr_logger(&self, stderr: ChildStderr) {
+        let console_tx = self.console_tx.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stderr).lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                log(LogLevel::Warn, &format!("[{id}] {line}"));
+                let _ = console_tx.send(line);
             }
         });
+    }
+
+    pub async fn execute_command(&self, command: String) -> Result<(), Error> {
+        let command_tx = self
+            .command_tx
+            .as_ref()
+            .ok_or_else(|| Error::other("Instance runtime is not running"))?;
+
+        command_tx
+            .send(RuntimeCommand::SendCommand(command))
+            .await
+            .map_err(|_| Error::other("Runtime supervisor unavailable"))?;
+
+        Ok(())
     }
 
     async fn supervise(
@@ -255,11 +278,28 @@ impl InstanceRuntime {
                         result,
                         &status,
                     );
-                    let _ = event_tx.send(RuntimeEvent::Exited(id.clone())).await;
                     break;
                 }
             }
         }
+
+        // A closed command channel can end the loop while the process is still alive.
+        match child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if let Err(error) = child.kill().await {
+                    log(LogLevel::Error, &format!("Failed to terminate instance {id}: {error}"));
+                    return;
+                }
+            }
+            Err(error) => {
+                log(LogLevel::Error, &format!("Failed to confirm instance {id} exited: {error}"));
+                return;
+            }
+        }
+
+        *status.write().unwrap() = InstanceStatus::Stopped;
+        let _ = event_tx.send(RuntimeEvent::Exited(id)).await;
     }
 
     async fn stop_process(
