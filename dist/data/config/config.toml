@@ -1,5 +1,0 @@
-server_software = "Paper"
-proxy_software = "Velocity"
-fallback_minecraft_version = "26.2"
-http_ip = "127.0.0.1"
-http_port = 8080
