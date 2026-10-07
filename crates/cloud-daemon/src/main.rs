@@ -47,6 +47,9 @@ async fn main() {
     log(LogLevel::Info, "BuliCloud-Core initialized");
     log(LogLevel::Info, "BuliCloud daemon is running");
 
+    core.spawn_instance_event_listener().await;
+    log(LogLevel::Info, "Instance Eventlistener is running");
+
     let server_core = Arc::clone(&core);
     let server_task = tokio::spawn(async move {
         log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");

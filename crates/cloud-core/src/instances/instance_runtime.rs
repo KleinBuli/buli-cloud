@@ -24,6 +24,7 @@ pub(crate) struct InstanceRuntime {
     instance: Instance,
     template: Template,
     command_tx: Option<mpsc::Sender<RuntimeCommand>>,
+    event_tx: mpsc::Sender<RuntimeEvent>,
     status: Arc<RwLock<InstanceStatus>>,
 }
 
@@ -31,6 +32,10 @@ pub(crate) struct InstanceRuntime {
 pub struct InstanceInfo {
     instance: Instance,
     status: InstanceStatus,
+}
+
+pub enum RuntimeEvent {
+    Exited(String),
 }
 
 impl InstanceInfo {
@@ -52,10 +57,11 @@ pub enum InstanceStatus {
 }
 
 impl InstanceRuntime {
-    pub(crate) fn new(instance: Instance, template: Template) -> Self {
+    pub(crate) fn new(instance: Instance, template: Template, event_tx: mpsc::Sender<RuntimeEvent>) -> Self {
         Self {
             instance,
             template,
+            event_tx,
             command_tx: None,
             status: Arc::new(RwLock::new(Stopped)),
         }
@@ -171,6 +177,7 @@ impl InstanceRuntime {
         let id = self.instance.id().to_string();
         let status = Arc::clone(&self.status);
         let stdin = child.stdin.take();
+        let event_tx = self.event_tx.clone();
 
         let stop_command: &'static [u8] = if self.template().server_software() == &ServerSoftware::Velocity {
             b"shutdown\n"
@@ -178,7 +185,7 @@ impl InstanceRuntime {
             b"stop\n"
         };
 
-        tokio::spawn(Self::supervise(child, stdin, command_rx, stop_command, status, id));
+        tokio::spawn(Self::supervise(child, stdin, command_rx, stop_command, status, id, event_tx));
 
         self.set_status(InstanceStatus::Running);
 
@@ -212,6 +219,7 @@ impl InstanceRuntime {
         stop_command: &'static [u8],
         status: Arc<RwLock<InstanceStatus>>,
         id: String,
+        event_tx: mpsc::Sender<RuntimeEvent>,
     ) {
         loop {
             tokio::select! {
@@ -247,7 +255,7 @@ impl InstanceRuntime {
                         result,
                         &status,
                     );
-
+                    let _ = event_tx.send(RuntimeEvent::Exited(id.clone())).await;
                     break;
                 }
             }

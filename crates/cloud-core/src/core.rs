@@ -12,6 +12,7 @@ use std::{
     fs,
     io::{Error, ErrorKind},
     path::PathBuf,
+    sync::Arc,
 };
 use tokio::sync::{Mutex, MutexGuard};
 
@@ -24,9 +25,9 @@ struct Lifecycle {
 /// Coordinates mutations across groups, templates and runtime instances.
 pub struct CloudCore {
     root_path: PathBuf,
-    group_manager: GroupManager,
-    template_manager: TemplateManager,
-    instance_manager: InstanceManager,
+    group_manager: Arc<GroupManager>,
+    template_manager: Arc<TemplateManager>,
+    instance_manager: Arc<InstanceManager>,
     config_manager: ConfigManager,
     server_software_manager: ServerSoftwareManager,
     operations: Mutex<Lifecycle>,
@@ -37,14 +38,21 @@ impl CloudCore {
         let root_path = root_path.into();
         let config_manager = ConfigManager::new(root_path.join("config/config.toml")).await?;
         Ok(Self {
-            group_manager: GroupManager::new(root_path.join("config/groups.toml"))?,
-            template_manager: TemplateManager::new(root_path.join("templates"), root_path.join("cache")),
-            instance_manager: InstanceManager::new(root_path.join("running")),
+            group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
+            template_manager: Arc::new(TemplateManager::new(root_path.join("templates"), root_path.join("cache"))),
+            instance_manager: Arc::new(InstanceManager::new(root_path.join("running"))),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache")),
             root_path,
             operations: Mutex::new(Lifecycle::default()),
         })
+    }
+
+    pub async fn spawn_instance_event_listener(&self) {
+        let instance_manager = Arc::clone(&self.instance_manager);
+        tokio::spawn(async move {
+            instance_manager.handle_runtime_events().await;
+        });
     }
 
     async fn operation(&self) -> Result<MutexGuard<'_, Lifecycle>, Error> {

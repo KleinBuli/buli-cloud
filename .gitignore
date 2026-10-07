@@ -1,2 +1,11 @@
 /target
-/dist
+/dist/
+/running/
+/static-servers/
+
+
+.env
+.env.*
+
+*.log
+/logs/
