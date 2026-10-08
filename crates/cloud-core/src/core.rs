@@ -42,7 +42,7 @@ impl CloudCore {
             template_manager: Arc::new(TemplateManager::new(root_path.join("templates"), root_path.join("cache"))),
             instance_manager: Arc::new(InstanceManager::new(root_path.join("running"))),
             config_manager,
-            server_software_manager: ServerSoftwareManager::new(root_path.join("cache")),
+            server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
             root_path,
             operations: Mutex::new(Lifecycle::default()),
         })
@@ -371,6 +371,9 @@ impl CloudCore {
         }
         let version = self.config_manager.config().fallback_minecraft_version();
         self.server_software_manager.ensure_paper_available(version).await?;
+        self.server_software_manager.ensure_mojang_mapping(version).await?;
+        self.server_software_manager.ensure_velocity_available().await?;
+
         self.group_manager.load_groups_from_config().await?;
         for group in self.group_manager.groups().await {
             let expected = self.templates_path().join(group.name());

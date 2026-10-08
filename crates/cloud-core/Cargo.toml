@@ -11,3 +11,5 @@ tokio = { version = "1", features = ["full"]}
 reqwest = { version = "0.13", features = ["json"] }
 toml = "1.1.6"
 tempfile = "3.27"
+zip = "8.6.0"
+sha256 = "1.6.0"
