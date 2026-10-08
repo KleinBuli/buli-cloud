@@ -2,7 +2,7 @@ use super::InstanceManager;
 use crate::{
     instances::{
         instance::Instance,
-        instance_runtime::{InstanceRuntime, InstanceStatus},
+        instance_runtime::{InstanceMode, InstanceRuntime, InstanceStatus, RuntimeConfig},
     },
     templates::template::Template,
     util::file_utils::validate_name,
@@ -57,12 +57,21 @@ impl InstanceManager {
         for number in 1u64.. {
             let id = format!("{group}-{number}");
             if !state.contains_key(&id) && !self.running_path.join(&id).try_exists()? {
-                let instance = Instance::new(&id, group, Some(template.name().to_string()));
-                state.insert(id, InstanceRuntime::new(instance.clone(), template, self.event_tx.clone()));
+                let instance = Instance::new(&id, group, Some(template.name().to_string()), InstanceMode::Dynamic);
+                state.insert(
+                    id,
+                    InstanceRuntime::new(instance.clone(), RuntimeConfig::Dynamic(template), self.event_tx.clone()),
+                );
                 return Ok(instance);
             }
         }
         Err(Error::other("No instance ID available"))
+    }
+
+    pub(crate) async fn create_instance_static(&self, group: &str) -> Result<(), Error> {
+        validate_name(group)?;
+
+        Ok(())
     }
 
     pub(crate) async fn remove_instance(&self, id: &str) -> Result<Option<Instance>, Error> {

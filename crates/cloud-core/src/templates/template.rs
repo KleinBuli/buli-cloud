@@ -2,14 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::software::softwaremanager::ServerSoftware;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     name: String,
     server_software: ServerSoftware,
     custom_server_software_jar_name: Option<String>,
     minecraft_version: Option<String>,
-    min_memory_mb: i32,
-    max_memory_mb: i32,
+    min_memory_mb: u32,
+    max_memory_mb: u32,
     min_instances: i16,
     max_instances: i16,
     new_instances_player_percentage: i8,
@@ -74,12 +74,12 @@ impl Template {
         &self.minecraft_version
     }
 
-    pub fn min_memory_mb(&self) -> &i32 {
-        &self.min_memory_mb
+    pub fn min_memory_mb(&self) -> u32 {
+        self.min_memory_mb
     }
 
-    pub fn max_memory_mb(&self) -> &i32 {
-        &self.max_memory_mb
+    pub fn max_memory_mb(&self) -> u32 {
+        self.max_memory_mb
     }
 
     pub fn min_instances(&self) -> &i16 {

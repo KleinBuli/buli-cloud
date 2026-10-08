@@ -1,18 +1,22 @@
 use serde::{Deserialize, Serialize};
 
+use crate::instances::instance_runtime::InstanceMode;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Instance {
     id: String,
     group_name: String,
     template_name: Option<String>,
+    instance_mode: InstanceMode,
 }
 
 impl Instance {
-    pub fn new(id: &str, group_name: &str, template_name: Option<String>) -> Self {
+    pub fn new(id: &str, group_name: &str, template_name: Option<String>, instance_mode: InstanceMode) -> Self {
         Self {
             id: id.to_string(),
             template_name,
             group_name: group_name.to_string(),
+            instance_mode,
         }
     }
 
@@ -26,5 +30,9 @@ impl Instance {
 
     pub fn template_name(&self) -> Option<&str> {
         self.template_name.as_deref()
+    }
+
+    pub fn instance_mode(&self) -> &InstanceMode {
+        &self.instance_mode
     }
 }

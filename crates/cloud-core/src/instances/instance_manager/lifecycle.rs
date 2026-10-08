@@ -75,6 +75,9 @@ impl InstanceManager {
                         log(LogLevel::Error, &format!("Failed to cleanup instance {id}: {error}"));
                     }
                 }
+
+                // TODO
+                _ => {}
             }
         }
     }

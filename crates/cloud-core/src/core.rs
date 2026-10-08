@@ -1,7 +1,7 @@
 use crate::{
     config::config_manager::ConfigManager,
     groups::{group::Group, group_manager::GroupManager},
-    instances::{instance::Instance, instance_manager::InstanceManager},
+    instances::{instance::Instance, instance_manager::InstanceManager, static_instance_manager::StaticInstanceManager},
     templates::template_manager::{GROUP_CONFIG, TemplateManager},
     util::{
         file_utils::{StagedDirectory, copy_dir_all, validate_name},
@@ -28,6 +28,7 @@ pub struct CloudCore {
     group_manager: Arc<GroupManager>,
     template_manager: Arc<TemplateManager>,
     instance_manager: Arc<InstanceManager>,
+    static_instance_manager: Arc<StaticInstanceManager>,
     config_manager: ConfigManager,
     server_software_manager: ServerSoftwareManager,
     operations: Mutex<Lifecycle>,
@@ -41,6 +42,7 @@ impl CloudCore {
             group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
             template_manager: Arc::new(TemplateManager::new(root_path.join("templates"))),
             instance_manager: Arc::new(InstanceManager::new(root_path.join("running"))),
+            static_instance_manager: Arc::new(StaticInstanceManager::new(root_path.join("static"))),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
             root_path,
@@ -75,6 +77,11 @@ impl CloudCore {
     pub fn template_manager(&self) -> &TemplateManager {
         &self.template_manager
     }
+
+    pub fn static_instance_manager(&self) -> &StaticInstanceManager {
+        &self.static_instance_manager
+    }
+
     pub fn instance_manager(&self) -> &InstanceManager {
         &self.instance_manager
     }
@@ -94,7 +101,7 @@ impl CloudCore {
         self.root_path.join("config")
     }
     pub fn static_servers_path(&self) -> PathBuf {
-        self.root_path.join("static-servers")
+        self.root_path.join("static")
     }
     pub fn cache_path(&self) -> PathBuf {
         self.root_path.join("cache")
@@ -418,6 +425,9 @@ impl CloudCore {
         }
 
         fs::create_dir_all(self.cache_path().join("versions"))?;
+        fs::create_dir(self.static_servers_path().join("proxy"))?;
+        fs::create_dir(self.static_servers_path().join("server"))?;
+
         let version = self.config_manager.config().fallback_minecraft_version();
         self.server_software_manager.ensure_paper_available(version).await?;
         self.server_software_manager.ensure_mojang_mapping(version).await?;
