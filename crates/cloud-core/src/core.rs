@@ -2,7 +2,7 @@ use crate::{
     config::config_manager::ConfigManager,
     groups::{group::Group, group_manager::GroupManager},
     instances::{instance::Instance, instance_manager::InstanceManager},
-    templates::template_manager::{TEMPLATE_CONFIG, TemplateManager},
+    templates::template_manager::{GROUP_CONFIG, TemplateManager},
     util::{
         file_utils::{StagedDirectory, copy_dir_all, validate_name},
         software::softwaremanager::{ServerSoftware, ServerSoftwareManager},
@@ -39,7 +39,7 @@ impl CloudCore {
         let config_manager = ConfigManager::new(root_path.join("config/config.toml")).await?;
         Ok(Self {
             group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
-            template_manager: Arc::new(TemplateManager::new(root_path.join("templates"), root_path.join("cache"))),
+            template_manager: Arc::new(TemplateManager::new(root_path.join("templates"))),
             instance_manager: Arc::new(InstanceManager::new(root_path.join("running"))),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
@@ -109,13 +109,14 @@ impl CloudCore {
     }
 
     async fn ensure_global(&self, group: &str) -> Result<(), Error> {
-        if !self.template_manager.exists(group, "global") {
+        if !self.template_manager.exists_on_disk(group, "global") {
             self.template_manager
                 .create_new_template(
                     group,
                     "global",
                     ServerSoftware::Paper,
                     Some(self.config_manager.config().fallback_minecraft_version().to_string()),
+                    None,
                 )
                 .await?;
         }
@@ -134,7 +135,7 @@ impl CloudCore {
         {
             return Err(Error::new(ErrorKind::AlreadyExists, "Group already exists"));
         }
-        let global_existed = self.template_manager.exists(name, "global");
+        let global_existed = self.template_manager.exists_on_disk(name, "global");
         self.ensure_global(name).await?;
         self.template_manager
             .load_group_templates(
@@ -172,9 +173,11 @@ impl CloudCore {
         }
         let path = self.templates_path().join(name);
         if path.exists() {
-            // Preserve unregistered files instead of silently deleting them with their group.
             for entry in fs::read_dir(&path)? {
-                if entry?.file_name() != "global" {
+                let entry = entry?;
+                let file_name = entry.file_name();
+
+                if file_name != "global" && file_name != GROUP_CONFIG {
                     return Err(Error::new(ErrorKind::ResourceBusy, "Group directory contains unregistered files"));
                 }
             }
@@ -197,14 +200,23 @@ impl CloudCore {
         self.group_manager.set_maintenance(name, enabled).await
     }
 
-    pub async fn create_template(&self, group: &str, name: &str, software: ServerSoftware, version: Option<String>) -> Result<(), Error> {
+    pub async fn create_template(
+        &self,
+        group: &str,
+        name: &str,
+        software: ServerSoftware,
+        version: Option<String>,
+        custom_jar_name: Option<String>,
+    ) -> Result<(), Error> {
         let _operation = self.operation().await?;
         self.require_group(group).await?;
-        self.template_manager.create_new_template(group, name, software, version).await?;
+        self.template_manager
+            .create_new_template(group, name, software, version, custom_jar_name)
+            .await?;
         if let Err(error) = self.group_manager.add_template(group, name).await {
             let path = self.template_manager.checked_path(group, name)?;
             StagedDirectory::new(&self.templates_path(), &path)?.commit();
-            self.template_manager.forget_template(group, name).await;
+            self.template_manager.forget_template(group, name).await?;
             return Err(error);
         }
         Ok(())
@@ -238,44 +250,79 @@ impl CloudCore {
         if let Some(staged) = staged {
             staged.commit();
         }
-        self.template_manager.forget_template(group, name).await;
+        self.template_manager.forget_template(group, name).await?;
         Ok(())
     }
 
     /// Create and prepare a stopped instance. Starting is a separate operation.
     pub async fn create_instance_from_template(&self, group: &str, name: &str) -> Result<Instance, Error> {
         let _operation = self.operation().await?;
+
         let group_config = self.require_group(group).await?;
+
         if group_config.maintenance() {
             return Err(Error::new(ErrorKind::ResourceBusy, "Group is in maintenance"));
         }
+
         if !group_config.template_names().iter().any(|n| n == name) {
             return Err(Error::new(ErrorKind::NotFound, "Template not assigned to group"));
         }
+
         let template = self
             .template_manager
             .get_template(group, name)
             .await
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Template not found"))?;
+
         let source = self.template_manager.checked_path(group, name)?;
-        if !source.join(template.jar_name()?).is_file() {
-            return Err(Error::new(ErrorKind::NotFound, "Template executable is missing"));
-        }
+        let jar_name = template.jar_name()?;
+
+        let cached_jar = match template.server_software() {
+            ServerSoftware::Custom => {
+                if !source.join(&jar_name).is_file() {
+                    return Err(Error::new(ErrorKind::NotFound, "Custom template JAR is missing"));
+                }
+
+                None
+            }
+
+            software => {
+                let version = template.minecraft_version().as_deref();
+
+                Some(self.server_software_manager.get_server_jar_path(software, version).await?)
+            }
+        };
+
         let instance = self.instance_manager.create_instance_from_template(group, template).await?;
-        let prepare = (|| {
+
+        let prepare = (|| -> Result<(), Error> {
             fs::create_dir_all(self.running_path())?;
+
             let staged = tempfile::Builder::new().prefix(".preparing-").tempdir_in(self.running_path())?;
+
             copy_dir_all(&source, staged.path())?;
-            let metadata = staged.path().join(TEMPLATE_CONFIG);
+
+            if let Some(jar_path) = cached_jar {
+                fs::copy(jar_path, staged.path().join(&jar_name))?;
+            }
+
+            let metadata = staged.path().join("templates.toml");
+
             if metadata.exists() {
                 fs::remove_file(metadata)?;
             }
-            fs::rename(staged.path(), self.running_path().join(instance.id()))
+
+            fs::rename(staged.path(), self.running_path().join(instance.id()))?;
+
+            Ok(())
         })();
+
         if let Err(error) = prepare {
             self.instance_manager.remove_instance(instance.id()).await?;
+
             return Err(error);
         }
+
         Ok(instance)
     }
 
@@ -369,6 +416,8 @@ impl CloudCore {
         ] {
             fs::create_dir_all(path)?;
         }
+
+        fs::create_dir_all(self.cache_path().join("versions"))?;
         let version = self.config_manager.config().fallback_minecraft_version();
         self.server_software_manager.ensure_paper_available(version).await?;
         self.server_software_manager.ensure_mojang_mapping(version).await?;

@@ -123,7 +123,16 @@ impl InstanceRuntime {
 
         let mut command = Command::new("java");
 
-        command.arg("-Dcom.mojang.eula.agree=true").arg("-jar").arg(jar).current_dir(path);
+        let min_memory_mb = self.template().min_memory_mb();
+        let max_memory_mb = self.template.max_memory_mb();
+
+        command
+            .arg("-Dcom.mojang.eula.agree=true")
+            .arg(format!("-Xms{min_memory_mb}m"))
+            .arg(format!("-Xmx{max_memory_mb}m"))
+            .arg("-jar")
+            .arg(jar)
+            .current_dir(path);
 
         if self.template().server_software() != &ServerSoftware::Velocity {
             command.arg("--nogui");

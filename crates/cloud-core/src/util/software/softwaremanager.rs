@@ -17,6 +17,7 @@ pub enum ServerSoftware {
     Paper,
     Vanilla,
     Velocity,
+    Custom,
 }
 
 impl fmt::Display for ServerSoftware {
@@ -25,6 +26,7 @@ impl fmt::Display for ServerSoftware {
             ServerSoftware::Paper => write!(f, "paper"),
             ServerSoftware::Vanilla => write!(f, "vanilla"),
             ServerSoftware::Velocity => write!(f, "velocity"),
+            ServerSoftware::Custom => write!(f, "custom"),
         }
     }
 }
@@ -196,6 +198,34 @@ impl ServerSoftwareManager {
 
     pub async fn ensure_vanilla_available() {}
 
+    pub async fn get_server_jar_path(&self, software: &ServerSoftware, version: Option<&str>) -> Result<PathBuf, Error> {
+        match software {
+            ServerSoftware::Paper => {
+                let version = version.ok_or_else(|| Error::new(std::io::ErrorKind::InvalidInput, "Paper requires a Minecraft version"))?;
+
+                self.ensure_paper_available(version).await?;
+                self.ensure_mojang_mapping(version).await?;
+
+                Ok(self.download_path.join(format!("paper-{version}.jar")))
+            }
+
+            ServerSoftware::Velocity => {
+                self.ensure_velocity_available().await?;
+                Ok(self.download_path.join("velocity.jar"))
+            }
+
+            ServerSoftware::Vanilla => Err(Error::new(
+                std::io::ErrorKind::Unsupported,
+                "Vanilla downloads are not implemented yet",
+            )),
+
+            ServerSoftware::Custom => Err(Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Custom JARs are stored inside templates",
+            )),
+        }
+    }
+
     async fn handle_paper_project_download(
         &self,
         server_software: &str,
@@ -293,7 +323,6 @@ impl ServerSoftwareManager {
     }
 
     fn paper_exists(&self, minecraft_version: &str) -> bool {
-        let file_path = self.download_path.join(minecraft_version);
-        return file_path.exists();
+        self.download_path.join(&format!("paper-{minecraft_version}.jar")).is_file()
     }
 }

@@ -65,16 +65,25 @@ async fn create_template(
     Query(options): Query<TemplateOptions>,
 ) -> Result<StatusCode, StatusCode> {
     let software = options.software.unwrap_or(ServerSoftware::Paper);
-    let version = if software == ServerSoftware::Velocity {
-        None
-    } else {
-        Some(
+
+    let version = match software {
+        ServerSoftware::Paper | ServerSoftware::Vanilla => Some(
             options
                 .version
                 .unwrap_or_else(|| core.config_manager().config().fallback_minecraft_version().to_string()),
-        )
+        ),
+
+        ServerSoftware::Velocity | ServerSoftware::Custom => None,
     };
-    core.create_template(&group, &name, software, version).await.map_err(error_status)?;
+
+    if software == ServerSoftware::Custom {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    core.create_template(&group, &name, software, version, None)
+        .await
+        .map_err(error_status)?;
+
     Ok(StatusCode::CREATED)
 }
 

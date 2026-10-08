@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::util::software::softwaremanager::ServerSoftware;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Template {
     name: String,
     server_software: ServerSoftware,
+    custom_server_software_jar_name: Option<String>,
     minecraft_version: Option<String>,
     min_memory_mb: i32,
     max_memory_mb: i32,
@@ -15,27 +16,24 @@ pub struct Template {
     auto_copy_on_stop: bool,
 }
 
-impl Clone for Template {
-    fn clone(&self) -> Self {
-        Self {
-            name: self.name.clone(),
-            server_software: self.server_software.clone(),
-            minecraft_version: self.minecraft_version.clone(),
-            min_memory_mb: self.min_memory_mb.clone(),
-            max_memory_mb: self.max_memory_mb.clone(),
-            min_instances: self.min_instances.clone(),
-            max_instances: self.max_instances.clone(),
-            new_instances_player_percentage: self.new_instances_player_percentage.clone(),
-            auto_copy_on_stop: self.auto_copy_on_stop.clone(),
-        }
-    }
-}
-
 impl Template {
     pub fn jar_name(&self) -> std::io::Result<String> {
         use std::io::{Error, ErrorKind};
         match self.server_software {
             ServerSoftware::Velocity => Ok("velocity.jar".to_string()),
+            ServerSoftware::Custom => {
+                let name = self
+                    .custom_server_software_jar_name
+                    .as_deref()
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Custom JAR filename is required"))?;
+
+                if !name.to_ascii_lowercase().ends_with(".jar") {
+                    return Err(Error::new(ErrorKind::InvalidInput, "Custom server file must have be .jar file"));
+                }
+
+                crate::util::file_utils::validate_name(name)?;
+                Ok(name.to_string())
+            }
             _ => {
                 let version = self
                     .minecraft_version
@@ -46,11 +44,12 @@ impl Template {
             }
         }
     }
-    pub fn new(name: &str, server_software: ServerSoftware, minecraft_version: Option<String>) -> Self {
+    pub fn new(name: &str, server_software: ServerSoftware, minecraft_version: Option<String>, custom_jar_name: Option<String>) -> Self {
         Self {
             name: String::from(name),
             server_software,
             minecraft_version,
+            custom_server_software_jar_name: custom_jar_name,
             min_memory_mb: 512,
             max_memory_mb: 512,
             min_instances: 0,
@@ -65,6 +64,10 @@ impl Template {
 
     pub fn server_software(&self) -> &ServerSoftware {
         &self.server_software
+    }
+
+    pub fn custom_jar_name(&self) -> &Option<String> {
+        &self.custom_server_software_jar_name
     }
 
     pub fn minecraft_version(&self) -> &Option<String> {
