@@ -36,6 +36,7 @@ pub struct InstanceInfo {
 }
 
 pub enum RuntimeEvent {
+    Started(String),
     Exited(String),
 }
 
