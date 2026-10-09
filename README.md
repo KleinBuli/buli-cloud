@@ -2,64 +2,26 @@
   <img src="bulicloud.png" width="600" alt="BuliCloud Logo">
 </p>
 
-# ⛅ BuliCloud
+## ☁️ BuliCloud
 
-BuliCloud is a lightweight Minecraft cloud system written in Rust.
+A lightweight, modern Minecraft cloud system built with Rust.
 
-The goal is to provide a simple and understandable way to manage Minecraft server infrastructure without unnecessary complexity.
-
-BuliCloud focuses on a small core, clear architecture and predictable behavior.
+BuliCloud is an open-source project aiming to make hosting and managing Minecraft server networks simple, efficient, and accessible.
 
 ## 💡 Vision
 
-BuliCloud should make it easy to define, create and manage server instances while keeping the underlying system transparent.
+The vision is to create a powerful yet lightweight alternative to traditional Minecraft cloud systems, focusing on simplicity, performance, and ease of use.
 
-The project is designed to stay lightweight and only introduce complexity where it is actually needed.
+BuliCloud is designed to give server owners full control over their infrastructure without unnecessary complexity.
 
-## ✨ What BuliCloud should feel like
+## 🚧 Early Development
 
-The ideal BuliCloud experience is something like:
-```text
-$ bulicloud start
+BuliCloud is currently in early development.
 
-[INFO] Starting BuliCloud...
-[INFO] Loading configuration...
-[INFO] Loading templates...
-[INFO] Preparing infrastructure...
+The project is actively being worked on, and many features are still experimental, incomplete, or subject to change.
 
-BuliCloud is ready.
+BuliCloud is not yet ready for production use.
 
-```
+---
 
-No giant setup wizard.
-No twenty required services.
-No mysterious infrastructure.
-Just a cloud that starts and does its job.
-
-## 🛠️ Project Status
-
-BuliCloud is currently in early development phase.
-
-The architecture and APIs are not fully implemented yet and may still change.
-
-```text
-Cloud
- ├── Groups
- │    ├── Templates
- │    │    ├── Instance
- │    │    ├── Instance
- │    │    └── Instance
- │    │
- │    └── Templates
- │
- └── Infrastructure
- ```
-
-Templates describe what should run.
-Groups describe how those templates belong together.
-Instances are just the running result.
-The long-term vision is to make Minecraft infrastructure feel less like manually managing server folders and more like operating a small, purpose-built platform.
-
-## License
-
-See `LICENSE`.
+Built with ❤️ and Rust 🦀
