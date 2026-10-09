@@ -2,19 +2,19 @@
   <img src="bulicloud.png" width="600" alt="BuliCloud Logo">
 </p>
 
-☁️ BuliCloud
+## ☁️ BuliCloud
 
 A lightweight, modern Minecraft cloud system built with Rust.
 
 BuliCloud is an open-source project aiming to make hosting and managing Minecraft server networks simple, efficient, and accessible.
 
-💡 Vision
+## 💡 Vision
 
 The vision is to create a powerful yet lightweight alternative to traditional Minecraft cloud systems, focusing on simplicity, performance, and ease of use.
 
 BuliCloud is designed to give server owners full control over their infrastructure without unnecessary complexity.
 
-🚧 Early Development
+## 🚧 Early Development
 
 BuliCloud is currently in early development.
 
@@ -22,6 +22,6 @@ The project is actively being worked on, and many features are still experimenta
 
 BuliCloud is not yet ready for production use.
 
-────────
+---
 
 Built with ❤️ and Rust 🦀
