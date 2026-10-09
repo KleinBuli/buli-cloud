@@ -2,7 +2,7 @@ use super::InstanceManager;
 use crate::{
     instances::{
         instance::Instance,
-        instance_runtime::{InstanceMode, InstanceRuntime, InstanceStatus, RuntimeConfig},
+        instance_runtime::{InstanceMode, InstanceRuntime, InstanceStatus},
     },
     templates::template::Template,
     util::file_utils::validate_name,
@@ -58,10 +58,7 @@ impl InstanceManager {
             let id = format!("{group}-{number}");
             if !state.contains_key(&id) && !self.running_path.join(&id).try_exists()? {
                 let instance = Instance::new(&id, group, Some(template.name().to_string()), InstanceMode::Dynamic);
-                state.insert(
-                    id,
-                    InstanceRuntime::new(instance.clone(), RuntimeConfig::Dynamic(template), self.event_tx.clone()),
-                );
+                state.insert(id, InstanceRuntime::new(instance.clone(), template, self.event_tx.clone()));
                 return Ok(instance);
             }
         }

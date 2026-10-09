@@ -14,7 +14,7 @@ use tokio::{
 };
 
 use crate::{
-    instances::{instance::Instance, instance_runtime::InstanceStatus::Stopped, static_instances::StaticInstanceConfig},
+    instances::{instance::Instance, instance_runtime::InstanceStatus::Stopped},
     logger::logger::{LogLevel, log},
     templates::template::Template,
     util::software::softwaremanager::ServerSoftware,
@@ -22,7 +22,7 @@ use crate::{
 
 pub(crate) struct InstanceRuntime {
     instance: Instance,
-    runtime_config: RuntimeConfig,
+    template: Template,
     command_tx: Option<mpsc::Sender<RuntimeCommand>>,
     event_tx: mpsc::Sender<RuntimeEvent>,
     status: Arc<RwLock<InstanceStatus>>,
@@ -39,48 +39,6 @@ pub struct InstanceInfo {
 pub enum InstanceMode {
     Dynamic,
     Static,
-}
-
-pub enum RuntimeConfig {
-    Dynamic(Template),
-    Static(StaticInstanceConfig),
-}
-
-impl RuntimeConfig {
-    pub fn template(&self) -> Option<&Template> {
-        match self {
-            Self::Dynamic(template) => Some(template),
-            Self::Static(_) => None,
-        }
-    }
-
-    pub fn min_memory_mb(&self) -> u32 {
-        match self {
-            Self::Dynamic(template) => template.min_memory_mb(),
-            Self::Static(config) => config.min_memory_mb(),
-        }
-    }
-
-    pub fn max_memory_mb(&self) -> u32 {
-        match self {
-            Self::Dynamic(template) => template.max_memory_mb(),
-            Self::Static(config) => config.max_memory_mb(),
-        }
-    }
-
-    pub fn jar_name(&self) -> Result<String, Error> {
-        match self {
-            Self::Dynamic(template) => template.jar_name(),
-            Self::Static(config) => Ok(config.jar_name().to_string()),
-        }
-    }
-
-    pub fn server_software(&self) -> ServerSoftware {
-        match self {
-            Self::Dynamic(template) => template.server_software().clone(),
-            Self::Static(config) => config.software().clone(),
-        }
-    }
 }
 
 pub enum RuntimeEvent {
@@ -107,11 +65,11 @@ pub enum InstanceStatus {
 }
 
 impl InstanceRuntime {
-    pub(crate) fn new(instance: Instance, runtime_config: RuntimeConfig, event_tx: mpsc::Sender<RuntimeEvent>) -> Self {
+    pub(crate) fn new(instance: Instance, template: Template, event_tx: mpsc::Sender<RuntimeEvent>) -> Self {
         let (console_tx, _) = broadcast::channel(256);
         Self {
             instance,
-            runtime_config,
+            template,
             event_tx,
             command_tx: None,
             status: Arc::new(RwLock::new(Stopped)),
@@ -134,8 +92,8 @@ impl InstanceRuntime {
         self.status.read().unwrap().clone()
     }
 
-    pub(crate) fn runtime_config(&self) -> &RuntimeConfig {
-        &self.runtime_config
+    pub(crate) fn template(&self) -> &Template {
+        &self.template
     }
 
     pub(crate) fn set_status(&mut self, status: InstanceStatus) {
@@ -163,8 +121,8 @@ impl InstanceRuntime {
             InstanceStatus::Stopped => {}
         }
 
-        let jar = self.runtime_config().jar_name()?;
-        let software = self.runtime_config().server_software();
+        let jar = self.template().jar_name()?;
+        let software = self.template().server_software();
 
         if !path.join(&jar).is_file() {
             return Err(Error::new(ErrorKind::NotFound, format!("Instance executable missing: {jar}")));
@@ -172,8 +130,8 @@ impl InstanceRuntime {
 
         let mut command = Command::new("java");
 
-        let min_memory_mb = self.runtime_config().min_memory_mb();
-        let max_memory_mb = self.runtime_config().max_memory_mb();
+        let min_memory_mb = self.template().min_memory_mb();
+        let max_memory_mb = self.template().max_memory_mb();
 
         command
             .arg("-Dcom.mojang.eula.agree=true")
@@ -183,7 +141,7 @@ impl InstanceRuntime {
             .arg(jar)
             .current_dir(path);
 
-        if software != ServerSoftware::Velocity {
+        if self.template.server_software() != &ServerSoftware::Velocity {
             command.arg("--nogui");
         }
 
@@ -244,7 +202,7 @@ impl InstanceRuntime {
         let stdin = child.stdin.take();
         let event_tx = self.event_tx.clone();
 
-        let stop_command: &'static [u8] = if self.runtime_config().server_software() == ServerSoftware::Velocity {
+        let stop_command: &'static [u8] = if self.template().server_software() == &ServerSoftware::Velocity {
             b"shutdown\n"
         } else {
             b"stop\n"
