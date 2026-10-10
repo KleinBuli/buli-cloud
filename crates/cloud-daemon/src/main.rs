@@ -51,7 +51,7 @@ async fn main() {
     log(LogLevel::Info, "Instance Eventlistener is running");
 
     let server_core = Arc::clone(&core);
-    let server_task = tokio::spawn(async move {
+    let mut server_task = tokio::spawn(async move {
         log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");
         log(LogLevel::Info, "HTTP Server is running");
 
@@ -60,14 +60,20 @@ async fn main() {
         }
     });
 
-    if let Err(error) = tokio::signal::ctrl_c().await {
-        log(LogLevel::Error, &format!("Failed to listen for shutdown signal: {error}"));
-        return;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            if let Err(error) = result { log(LogLevel::Error, &format!("Shutdown signal failed: {error}")); }
+        }
+        _ = core.wait_for_shutdown() => {}
+        _ = &mut server_task => {}
     }
+    core.request_shutdown();
     log(LogLevel::Info, "Shutdown signal received");
     log(LogLevel::Info, "Stopping BuliCloud daemon...");
     if let Err(error) = core.shutdown().await {
         log(LogLevel::Error, &format!("Could not stop all instances: {error}"));
     }
-    server_task.abort();
+    if !server_task.is_finished() && tokio::time::timeout(std::time::Duration::from_secs(2), &mut server_task).await.is_err() {
+        server_task.abort();
+    }
 }

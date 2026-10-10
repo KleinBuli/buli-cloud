@@ -42,18 +42,13 @@ pub(crate) async fn parse_commands(http_client: &Client, url: String, cli: Cli) 
 
             cli::Commands::Start { group, template } => instance::start(http_client, &url, group, template).await,
 
-            cli::Commands::Stop { template } => {
-                println!("Stop template: {}", template);
-                return Ok(true);
-            }
-
-            cli::Commands::Copy { instance } => {
-                println!("Copy instance: {}", instance);
-                return Ok(true);
+            cli::Commands::Stop { instance } => {
+                http_client.post(format!("{url}instances/{instance}/stop")).send().await?.error_for_status()?;
+                Ok(true)
             }
 
             cli::Commands::Shutdown => {
-                println!("Shutdown");
+                http_client.post(format!("{url}shutdown")).send().await?.error_for_status()?;
                 return Ok(false);
             }
 
@@ -65,24 +60,8 @@ pub(crate) async fn parse_commands(http_client: &Client, url: String, cli: Cli) 
         },
 
         None => {
-            print_help();
+            help::print_help();
             return Ok(true);
         }
     }
-}
-
-fn print_help() {
-    println!(
-        r#"
-BuliCloud Commands
-
-  group create <name>              Create a new group            
-  template create <group> <name>   Create a new template
-  start <group> <template_name>    Start an instance from a template
-  stop <instance_name>             Stop a running instance
-  copy <instance_name>             Copy an instance
-  shutdown                         Stop the BuliCloud daemon
-  health                           Check daemon health
-"#
-    );
 }

@@ -13,8 +13,7 @@ pub fn print_help() {
 
     println!("{CYAN}{BOLD}  INSTANCE MANAGEMENT{RESET}");
     print_command("start <group> <template>", "Create and start instance");
-    print_command("stop <template>", "Stop an instance");
-    print_command("copy <instance>", "Copy instance files");
+    print_command("stop <instance>", "Stop an instance");
     print_command("console <instance>", "Attach to live console");
     print_command("instances", "List all running instances");
 

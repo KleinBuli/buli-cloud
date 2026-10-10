@@ -14,9 +14,40 @@ pub struct Template {
     max_instances: i16,
     new_instances_player_percentage: i8,
     static_instance: bool,
+    #[serde(default)]
+    role: Option<ServiceRole>,
+    #[serde(default)]
+    port: Option<u16>,
+    #[serde(default = "default_host")]
+    host: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum ServiceRole {
+    Proxy,
+    Backend,
+}
+
+fn default_host() -> String {
+    "127.0.0.1".to_string()
 }
 
 impl Template {
+    pub fn role(&self) -> ServiceRole {
+        self.role.clone().unwrap_or_else(|| {
+            if self.server_software == ServerSoftware::Velocity {
+                ServiceRole::Proxy
+            } else {
+                ServiceRole::Backend
+            }
+        })
+    }
+    pub fn port(&self) -> Option<u16> {
+        self.port
+    }
+    pub fn host(&self) -> &str {
+        &self.host
+    }
     pub fn jar_name(&self) -> std::io::Result<String> {
         use std::io::{Error, ErrorKind};
         match self.server_software {
@@ -56,6 +87,9 @@ impl Template {
             max_instances: -1,
             new_instances_player_percentage: 100,
             static_instance: false,
+            role: None,
+            port: None,
+            host: default_host(),
         }
     }
     pub fn name(&self) -> &str {
@@ -96,5 +130,29 @@ impl Template {
 
     pub fn new_instances_player_percentage(&self) -> &i8 {
         &self.new_instances_player_percentage
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_templates_and_fixed_proxy_ports_are_supported() {
+        let template = Template::new("proxy", ServerSoftware::Velocity, None, None);
+        let legacy = toml::to_string(&template)
+            .unwrap()
+            .lines()
+            .filter(|line| !line.starts_with("host ="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let legacy: Template = toml::from_str(&legacy).unwrap();
+        assert_eq!(legacy.role(), ServiceRole::Proxy);
+        assert_eq!(legacy.port(), None);
+        assert_eq!(legacy.host(), "127.0.0.1");
+        let configured = format!("{}\nport = 25577\nrole = 'Backend'\n", toml::to_string(&template).unwrap());
+        let configured: Template = toml::from_str(&configured).unwrap();
+        assert_eq!(configured.port(), Some(25577));
+        assert_eq!(configured.role(), ServiceRole::Backend);
     }
 }

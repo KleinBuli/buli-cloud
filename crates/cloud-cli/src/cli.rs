@@ -14,9 +14,6 @@ pub enum Commands {
         template: String,
     },
     Stop {
-        template: String,
-    },
-    Copy {
         instance: String,
     },
     Console {
@@ -60,4 +57,15 @@ pub enum TemplateCommands {
 pub enum GroupCommands {
     Create { name: String },
     List,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_targets_instance_and_copy_is_unavailable() {
+        assert!(matches!(Cli::try_parse_from(["bulicloud", "stop", "lobby-1"]).unwrap().command, Some(Commands::Stop { instance }) if instance == "lobby-1"));
+        assert!(Cli::try_parse_from(["bulicloud", "copy", "lobby-1"]).is_err());
+    }
 }

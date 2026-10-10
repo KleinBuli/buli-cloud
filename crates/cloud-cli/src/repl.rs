@@ -11,7 +11,9 @@ pub(crate) async fn run_cli_loop(http_client: &Client, url: &str) -> Result<(), 
         print!("BuliCloud > ");
         stdout().flush()?;
         let mut input = String::new();
-        stdin().read_line(&mut input)?;
+        if stdin().read_line(&mut input)? == 0 {
+            break;
+        }
 
         let input = input.trim();
 

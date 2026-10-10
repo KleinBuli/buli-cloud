@@ -66,6 +66,9 @@ impl GroupManager {
             }
             let mut group = Group::new(name.clone(), Vec::new(), config.path);
             for template in config.template_names {
+                if template.eq_ignore_ascii_case("global") {
+                    continue;
+                }
                 group.add_template(template);
             }
             group.set_maintenance(config.maintenance);
@@ -119,9 +122,7 @@ impl GroupManager {
 
     pub(crate) async fn remove_group(&self, name: &str) -> Result<(), Error> {
         self.update(|groups| {
-            groups
-                .remove(name)
-                .ok_or_else(|| Error::new(ErrorKind::NotFound, "Group not found"))?;
+            groups.remove(name).ok_or_else(|| Error::new(ErrorKind::NotFound, "Group not found"))?;
             Ok(())
         })
         .await
@@ -141,9 +142,7 @@ impl GroupManager {
 
     pub(crate) async fn delete_template(&self, group: &str, template: &str) -> Result<(), Error> {
         self.update(|groups| {
-            let group = groups
-                .get_mut(group)
-                .ok_or_else(|| Error::new(ErrorKind::NotFound, "Group not found"))?;
+            let group = groups.get_mut(group).ok_or_else(|| Error::new(ErrorKind::NotFound, "Group not found"))?;
             if !group.template_names().iter().any(|name| name == template) {
                 return Err(Error::new(ErrorKind::NotFound, "Template not assigned to group"));
             }

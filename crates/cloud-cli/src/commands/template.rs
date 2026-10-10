@@ -2,7 +2,7 @@ use cloud_core::logger::logger::{LogLevel, LogLevel::Info, log};
 use reqwest::{Client, Error};
 
 pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, Error> {
-    let response = http_client.post(format!("{}templates/", url)).send().await?;
+    let response = http_client.get(format!("{}templates", url)).send().await?;
     let status = response.status();
     let body = response.text().await?;
 

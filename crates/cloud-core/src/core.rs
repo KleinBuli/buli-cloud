@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::{
     fs,
-    sync::{Mutex, MutexGuard},
+    sync::{RwLock, RwLockWriteGuard, watch},
 };
 
 #[derive(Default)]
@@ -36,12 +36,45 @@ pub struct CloudCore {
     instance_manager: Arc<InstanceManager>,
     config_manager: ConfigManager,
     server_software_manager: ServerSoftwareManager,
-    operations: Mutex<Lifecycle>,
+    operations: RwLock<Lifecycle>,
+    _data_lock: std::fs::File,
+    shutdown_requested: watch::Sender<bool>,
 }
 
 impl CloudCore {
     pub async fn new<P: Into<PathBuf>>(root_path: P) -> Result<Self, Error> {
         let root_path = root_path.into();
+        fs::create_dir_all(&root_path).await?;
+        let data_lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root_path.join(".lock"))?;
+        data_lock
+            .try_lock()
+            .map_err(|error| Error::new(ErrorKind::ResourceBusy, format!("Data directory is already in use: {error}")))?;
+        for directory in ["static", "running"] {
+            let directory = root_path.join(directory);
+            if !directory.exists() {
+                continue;
+            }
+            for entry in std::fs::read_dir(directory)? {
+                let entry = entry?;
+                if entry.file_type()?.is_dir() && entry.path().join(".process").exists() {
+                    return Err(Error::new(
+                        ErrorKind::ResourceBusy,
+                        format!(
+                            "Unconfirmed process ownership in {}; verify the old process has stopped before removing .process",
+                            entry.path().display()
+                        ),
+                    ));
+                }
+            }
+        }
+        for directory in ["templates", "static", "running"] {
+            crate::util::file_utils::recover_staged_directories(&root_path.join(directory))?;
+        }
         let config_manager = ConfigManager::new(root_path.join("config/config.toml")).await?;
         Ok(Self {
             group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
@@ -50,7 +83,9 @@ impl CloudCore {
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
             root_path,
-            operations: Mutex::new(Lifecycle::default()),
+            operations: RwLock::new(Lifecycle::default()),
+            _data_lock: data_lock,
+            shutdown_requested: watch::channel(false).0,
         })
     }
 
@@ -61,9 +96,9 @@ impl CloudCore {
         });
     }
 
-    async fn operation(&self) -> Result<MutexGuard<'_, Lifecycle>, Error> {
-        let guard = self.operations.lock().await;
-        if guard.shutting_down {
+    async fn operation(&self) -> Result<RwLockWriteGuard<'_, Lifecycle>, Error> {
+        let guard = self.operations.write().await;
+        if guard.shutting_down || *self.shutdown_requested.borrow() {
             return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
         }
         if !guard.initialized {
@@ -113,18 +148,7 @@ impl CloudCore {
     }
 
     async fn ensure_global(&self, group: &str) -> Result<(), Error> {
-        if !self.template_manager.exists_on_disk(group, "global") {
-            self.template_manager
-                .create_new_template(
-                    group,
-                    "global",
-                    ServerSoftware::Paper,
-                    Some(self.config_manager.config().fallback_minecraft_version().to_string()),
-                    None,
-                )
-                .await?;
-        }
-        Ok(())
+        fs::create_dir_all(self.templates_path().join(group).join("global")).await
     }
 
     pub async fn create_group(&self, name: &str) -> Result<(), Error> {
@@ -135,13 +159,11 @@ impl CloudCore {
         }
         let global_existed = self.template_manager.exists_on_disk(name, "global");
         self.ensure_global(name).await?;
-        self.template_manager
-            .load_group_templates(name, &["global".to_string()], self.config_manager.config().fallback_minecraft_version())
-            .await?;
-        let group = Group::new(name.to_string(), vec!["global".to_string()], self.templates_path().join(name));
+        self.template_manager.load_group_templates(name, &[]).await?;
+        let group = Group::new(name.to_string(), vec![], self.templates_path().join(name));
         if let Err(error) = self.group_manager.add_group(group).await {
             if !global_existed {
-                StagedDirectory::new(&self.templates_path(), &self.templates_path().join(name).join("global"))?.commit();
+                StagedDirectory::new(&self.templates_path(), &self.templates_path().join(name).join("global"))?.commit()?;
             }
             self.template_manager.forget_group(name).await;
             return Err(error);
@@ -152,7 +174,7 @@ impl CloudCore {
     pub async fn remove_group(&self, name: &str) -> Result<(), Error> {
         let _operation = self.operation().await?;
         let group = self.require_group(name).await?;
-        if group.template_names().iter().any(|name| name != "global")
+        if !group.template_names().is_empty()
             || self
                 .instance_manager
                 .instances_list()
@@ -178,9 +200,12 @@ impl CloudCore {
         } else {
             None
         };
+        if let Some(staged) = &staged {
+            staged.backup_metadata(&[self.config_path().join("groups.toml")])?;
+        }
         self.group_manager.remove_group(name).await?;
         if let Some(staged) = staged {
-            staged.commit();
+            staged.commit()?;
         }
         self.template_manager.forget_group(name).await;
         Ok(())
@@ -206,7 +231,7 @@ impl CloudCore {
             .await?;
         if let Err(error) = self.group_manager.add_template(group, name).await {
             let path = self.template_manager.checked_path(group, name)?;
-            StagedDirectory::new(&self.templates_path(), &path)?.commit();
+            StagedDirectory::new(&self.templates_path(), &path)?.commit()?;
             self.template_manager.forget_template(group, name).await?;
             return Err(error);
         }
@@ -216,8 +241,8 @@ impl CloudCore {
     pub async fn delete_template(&self, group: &str, name: &str) -> Result<(), Error> {
         let _operation = self.operation().await?;
         let group_config = self.require_group(group).await?;
-        if name == "global" {
-            return Err(Error::new(ErrorKind::ResourceBusy, "The global template is required"));
+        if name.eq_ignore_ascii_case("global") {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Global is a reserved directory"));
         }
         if !group_config.template_names().iter().any(|n| n == name) {
             return Err(Error::new(ErrorKind::NotFound, "Template not assigned to group"));
@@ -237,6 +262,9 @@ impl CloudCore {
         } else {
             None
         };
+        if let Some(staged) = &staged {
+            staged.backup_metadata(&[self.config_path().join("groups.toml"), self.templates_path().join(group).join(GROUP_CONFIG)])?;
+        }
         self.group_manager.delete_template(group, name).await?;
         if let Err(error) = self.template_manager.forget_template(group, name).await {
             self.group_manager
@@ -246,7 +274,7 @@ impl CloudCore {
             return Err(error);
         }
         if let Some(staged) = staged {
-            staged.commit();
+            staged.commit()?;
         }
         Ok(())
     }
@@ -296,11 +324,21 @@ impl CloudCore {
             InstanceMode::Static => self.static_servers_path(),
         };
 
+        let global_source = source
+            .parent()
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Template has no parent directory"))?
+            .join("global");
+
         let prepare = (async || -> Result<(), Error> {
             fs::create_dir_all(&base_path).await?;
 
             let staged = tempfile::Builder::new().prefix(".preparing-").tempdir_in(&base_path)?;
 
+            if !global_source.is_dir() {
+                return Err(Error::new(ErrorKind::NotFound, "Global template directory missing"));
+            }
+
+            copy_dir_all(&global_source, staged.path())?;
             copy_dir_all(&source, staged.path())?;
 
             if let Some(jar_path) = cached_jar {
@@ -319,7 +357,9 @@ impl CloudCore {
                 config.save(&staged.path().join("instance.toml")).await?;
             }
 
+            crate::util::file_utils::atomic_write(&staged.path().join(".destination"), instance.id().as_bytes())?;
             fs::rename(staged.path(), &base_path.join(instance.id())).await?;
+            fs::remove_file(base_path.join(instance.id()).join(".destination")).await?;
 
             Ok(())
         })();
@@ -334,7 +374,10 @@ impl CloudCore {
     }
 
     pub async fn start_instance(&self, id: &str) -> Result<(), Error> {
-        let _operation = self.operation().await?;
+        let operation = self.operations.read().await;
+        if !operation.initialized || operation.shutting_down || *self.shutdown_requested.borrow() {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is unavailable"));
+        }
         let instance = self
             .instance_manager
             .get_instance(id)
@@ -347,7 +390,10 @@ impl CloudCore {
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {
-        let _operation = self.operation().await?;
+        let operation = self.operations.read().await;
+        if !operation.initialized || operation.shutting_down || *self.shutdown_requested.borrow() {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is unavailable"));
+        }
         self.instance_manager.stop_instance(id).await
     }
 
@@ -360,6 +406,9 @@ impl CloudCore {
     pub async fn validate_groups(&self) -> Result<(), Error> {
         for group in self.group_manager.groups().await {
             for name in group.template_names() {
+                if name == "global" {
+                    continue;
+                }
                 if self.template_manager.get_template(group.name(), name).await.is_none() {
                     return Err(Error::new(
                         ErrorKind::NotFound,
@@ -368,28 +417,6 @@ impl CloudCore {
                 }
             }
         }
-        Ok(())
-    }
-
-    pub async fn cleanup_running_directory(&self) -> Result<(), Error> {
-        if !self.running_path().exists() {
-            fs::create_dir_all(&self.running_path()).await?;
-            return Ok(());
-        }
-
-        let mut entries = tokio::fs::read_dir(&self.running_path()).await?;
-
-        while let Some(entry) = entries.next_entry().await? {
-            let path = entry.path();
-            let metadata = tokio::fs::symlink_metadata(&path).await?;
-
-            if metadata.is_dir() {
-                tokio::fs::remove_dir_all(&path).await?;
-            } else {
-                tokio::fs::remove_file(&path).await?;
-            }
-        }
-
         Ok(())
     }
 
@@ -414,7 +441,7 @@ impl CloudCore {
     }
 
     pub async fn initialize(&self) -> Result<(), Error> {
-        let mut operation = self.operations.lock().await;
+        let mut operation = self.operations.write().await;
         if operation.shutting_down {
             return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
         }
@@ -422,7 +449,6 @@ impl CloudCore {
             return Ok(());
         }
 
-        self.cleanup_running_directory().await?;
         for path in [
             self.config_path(),
             self.templates_path(),
@@ -451,11 +477,8 @@ impl CloudCore {
                 ));
             }
             self.ensure_global(group.name()).await?;
-            self.group_manager.add_template(group.name(), "global").await?;
             let group = self.require_group(group.name()).await?;
-            self.template_manager
-                .load_group_templates(group.name(), group.template_names(), version)
-                .await?;
+            self.template_manager.load_group_templates(group.name(), group.template_names()).await?;
         }
         self.validate_groups().await?;
         self.restore_static_instances().await?;
@@ -469,13 +492,8 @@ impl CloudCore {
 
         let config = self.config_manager.read_config().await?;
         let groups = self.group_manager.read_groups_from_config()?;
-        let templates = self.template_manager.prepare_reload(&groups, config.fallback_minecraft_version())?;
-        for instance in self.instance_manager.instances_list().await {
-            let instance = instance.instance();
-            if !templates.contains_key(&(instance.group_name().to_string(), instance.template_name().to_string())) {
-                return Err(Error::new(ErrorKind::ResourceBusy, "Reload would orphan an existing instance"));
-            }
-        }
+        let templates = self.template_manager.prepare_reload(&groups)?;
+
         self.group_manager.replace_groups(groups).await;
         self.template_manager.replace_templates(templates).await;
         self.config_manager.replace_config(config);
@@ -483,11 +501,60 @@ impl CloudCore {
         Ok(())
     }
 
+    pub fn request_shutdown(&self) {
+        self.shutdown_requested.send_replace(true);
+    }
+
+    pub async fn wait_for_shutdown(&self) {
+        let mut receiver = self.shutdown_requested.subscribe();
+        let _ = receiver.wait_for(|requested| *requested).await;
+    }
+
     pub async fn shutdown(&self) -> Result<(), Error> {
-        let mut operation = self.operations.lock().await;
-        operation.shutting_down = true;
+        self.request_shutdown();
+        if let Ok(mut operation) = self.operations.try_write() {
+            operation.shutting_down = true;
+        }
         self.instance_manager.shutdown().await?;
-        // self.cleanup_running_directory().await?; TODO:  fix race condition
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn data_directory_is_exclusive_and_preserved() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("running")).unwrap();
+        std::fs::write(root.path().join("running/world"), b"preserve").unwrap();
+        let core = CloudCore::new(root.path()).await.unwrap();
+        assert!(CloudCore::new(root.path()).await.is_err());
+        drop(core);
+        let _core = CloudCore::new(root.path()).await.unwrap();
+        assert_eq!(std::fs::read(root.path().join("running/world")).unwrap(), b"preserve");
+    }
+
+    #[tokio::test]
+    async fn unresolved_process_blocks_reuse() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("static/test")).unwrap();
+        std::fs::write(root.path().join("static/test/.process"), b"123").unwrap();
+        assert!(CloudCore::new(root.path()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reload_accepts_global_as_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let core = CloudCore::new(root.path()).await.unwrap();
+        core.operations.write().await.initialized = true;
+        core.create_group("lobby").await.unwrap();
+        core.reload().await.unwrap();
+        assert!(core.templates_path().join("lobby/global").is_dir());
+        assert!(core.group_manager.groups().await[0].template_names().is_empty());
+        core.request_shutdown();
+        core.wait_for_shutdown().await;
+        assert!(core.create_group("late").await.is_err());
     }
 }

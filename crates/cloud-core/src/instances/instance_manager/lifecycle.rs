@@ -2,7 +2,7 @@ use super::InstanceManager;
 use crate::{
     instances::{
         instance::{Instance, InstanceMode},
-        instance_runtime::{InstanceStatus, RuntimeEvent},
+        instance_runtime::{InstanceStatus, RuntimeEvent, RuntimeExitOutcome},
     },
     logger::logger::{LogLevel, log},
     util::{
@@ -17,17 +17,42 @@ use std::{
 
 impl InstanceManager {
     pub async fn start_instance(&self, id: &str) -> Result<(), Error> {
-        let mut state = self.state.lock().await;
+        let runtime = self.runtime(id).await?;
+        let mut runtime = runtime.lock().await;
 
-        let runtime = state.get_mut(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
-
-        if runtime.status() != InstanceStatus::Stopped {
-            return Ok(());
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
+        }
+        runtime.request_start()?;
+        match runtime.status() {
+            InstanceStatus::Starting | InstanceStatus::Running => return Ok(()),
+            InstanceStatus::Stopping => return Err(Error::new(ErrorKind::ResourceBusy, "Instance is stopping")),
+            InstanceStatus::Stopped | InstanceStatus::Failed => {}
         }
 
-        let port = self.set_port(runtime.instance(), runtime.template().server_software()).await?;
+        if self.working_directory(runtime.instance()).join(".process").exists() {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Unconfirmed process ownership"));
+        }
+        let port = match self
+            .set_port(
+                runtime.instance(),
+                runtime.template().server_software(),
+                runtime.template().port(),
+                runtime.template().host(),
+            )
+            .await
+        {
+            Ok(port) => port,
+            Err(error) => {
+                runtime.set_status(InstanceStatus::Failed);
+                return Err(error);
+            }
+        };
 
-        if let Err(error) = runtime.start(&self.working_directory(runtime.instance())) {
+        runtime.set_port(port);
+        let directory = self.working_directory(runtime.instance());
+        if let Err(error) = runtime.start(&directory) {
+            runtime.set_status(InstanceStatus::Failed);
             if let Err(cleanup_error) = self.port_allocator().deallocate(port).await {
                 log(LogLevel::Error, &format!("Failed to deallocate port {port}: {cleanup_error}"));
             }
@@ -38,8 +63,13 @@ impl InstanceManager {
         Ok(())
     }
 
-    async fn set_port(&self, instance: &Instance, software: &ServerSoftware) -> Result<u16, Error> {
-        let port = self.port_allocator.allocate_next(instance.id()).await?;
+    async fn set_port(&self, instance: &Instance, software: &ServerSoftware, fixed_port: Option<u16>, host: &str) -> Result<u16, Error> {
+        let port = if let Some(port) = fixed_port {
+            self.port_allocator.allocate(instance.id(), port).await?;
+            port
+        } else {
+            self.port_allocator.allocate_next(instance.id()).await?
+        };
         let properties_path = self.working_directory(instance).join("server.properties");
 
         let result = (|| -> Result<(), Error> {
@@ -51,13 +81,7 @@ impl InstanceManager {
                     Err(error) => return Err(error),
                 };
                 let mut config: toml::Table = toml::from_str(&content).map_err(Error::other)?;
-                let host = config
-                    .get("bind")
-                    .and_then(toml::Value::as_str)
-                    .and_then(|bind| bind.rsplit_once(':'))
-                    .map(|(host, _)| host)
-                    .unwrap_or("0.0.0.0");
-                let bind = format!("{host}:{port}");
+                let bind = std::net::SocketAddr::new(host.parse().map_err(Error::other)?, port).to_string();
                 config.insert("bind".to_string(), toml::Value::String(bind));
                 return atomic_write(&path, toml::to_string_pretty(&config).map_err(Error::other)?.as_bytes());
             }
@@ -66,6 +90,7 @@ impl InstanceManager {
                 writeln!(file, "server-port={port}")?;
             }
 
+            set_server_property(&properties_path, "server-ip", host)?;
             set_server_property(&properties_path, "server-port", &port.to_string())
         })();
 
@@ -90,44 +115,61 @@ impl InstanceManager {
             let Some(event) = event else {
                 break;
             };
-
             match event {
-                RuntimeEvent::Exited(id, generation) => {
+                RuntimeEvent::Exited {
+                    id,
+                    generation,
+                    outcome: RuntimeExitOutcome::Confirmed,
+                } => {
                     if let Err(error) = self.handle_instance_exit(&id, generation).await {
                         log(LogLevel::Error, &format!("Failed to cleanup instance {id}: {error}"));
                     }
                 }
 
-                // TODO
-                _ => {}
+                RuntimeEvent::Exited {
+                    id,
+                    generation,
+                    outcome: RuntimeExitOutcome::Unconfirmed(reason),
+                } => {
+                    log(
+                        LogLevel::Error,
+                        &format!(
+                            "Supervisor of instance {id} (generation {generation}) \
+                         failed; process termination is not confirmed: {reason}"
+                        ),
+                    );
+                }
+
+                RuntimeEvent::Started(_) => {}
             }
         }
     }
 
     async fn handle_instance_exit(&self, id: &str, generation: u64) -> Result<(), Error> {
-        let mut state = self.state.lock().await;
-        let Some(runtime) = state.get(id) else {
+        let Ok(runtime) = self.runtime(id).await else {
             return Ok(());
         };
+        let mut runtime = runtime.lock().await;
         if runtime.generation() != generation {
             return Ok(());
         }
-        if let Some(port) = self.port_allocator.get_corresponding_port(id).await {
-            self.port_allocator.deallocate(port).await?;
+
+        if runtime.instance().instance_mode() == &InstanceMode::Dynamic && runtime.status() == InstanceStatus::Stopped {
+            self.cleanup_instance_files(runtime.instance()).await?;
+            runtime.retire();
+            self.state.lock().await.remove(id);
         }
 
-        if runtime.instance().instance_mode() == &InstanceMode::Dynamic {
-            self.cleanup_instance_files(runtime.instance()).await?;
-            state.remove(id);
+        if let Some(port) = self.port_allocator.get_corresponding_port(id).await {
+            self.port_allocator.deallocate(port).await?;
         }
 
         Ok(())
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {
-        let mut state = self.state.lock().await;
-
-        let runtime = state.get_mut(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
+        let runtime = self.runtime(id).await?;
+        let mut runtime = runtime.lock().await;
 
         runtime.stop().await?;
         if let Some(port) = self.port_allocator.get_corresponding_port(id).await {
@@ -137,15 +179,24 @@ impl InstanceManager {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), Error> {
-        let mut state = self.state.lock().await;
+        self.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+        let runtimes: Vec<_> = self.state.lock().await.values().cloned().collect();
+        let mut tasks = tokio::task::JoinSet::new();
+        for runtime in runtimes {
+            tasks.spawn(async move {
+                tokio::time::timeout(std::time::Duration::from_secs(45), async { runtime.lock().await.stop().await })
+                    .await
+                    .map_err(|_| Error::new(ErrorKind::TimedOut, "Instance shutdown timed out"))?
+            });
+        }
         let mut failure = None;
-
-        for runtime in state.values_mut() {
-            if let Err(error) = runtime.stop().await {
-                failure = Some(error);
+        while let Some(result) = tasks.join_next().await {
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failure = Some(error),
+                Err(error) => failure = Some(Error::other(error)),
             }
         }
-
         failure.map_or(Ok(()), Err)
     }
 }

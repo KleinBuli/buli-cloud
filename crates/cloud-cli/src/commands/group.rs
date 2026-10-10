@@ -5,7 +5,7 @@ use cloud_core::logger::logger::{
 use reqwest::Client;
 
 pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwest::Error> {
-    let response = http_client.get(format!("{}groups/", url)).send().await?;
+    let response = http_client.get(format!("{}groups", url)).send().await?;
     let status = response.status();
     let body = response.text().await?;
 

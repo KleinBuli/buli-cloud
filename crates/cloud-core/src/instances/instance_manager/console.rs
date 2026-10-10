@@ -1,16 +1,13 @@
 use super::InstanceManager;
 use crate::CloudCore;
 use axum::extract::ws::{Message, WebSocket};
-use std::{
-    io::{Error, ErrorKind},
-    sync::Arc,
-};
+use std::{io::Error, sync::Arc};
 use tokio::sync::broadcast::{self, error::RecvError};
 
 impl InstanceManager {
     pub async fn subscribe_console(&self, id: &str) -> Result<broadcast::Receiver<String>, Error> {
-        let state = self.state.lock().await;
-        let runtime = state.get(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
+        let runtime = self.runtime(id).await?;
+        let runtime = runtime.lock().await;
 
         Ok(runtime.subscribe_console())
     }
@@ -58,9 +55,8 @@ impl InstanceManager {
     }
 
     pub async fn send_command(&self, id: &str, command: String) -> Result<(), Error> {
-        let state = self.state.lock().await;
-
-        let runtime = state.get(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
+        let runtime = self.runtime(id).await?;
+        let runtime = runtime.lock().await;
 
         runtime.execute_command(command).await
     }

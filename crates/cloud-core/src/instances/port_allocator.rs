@@ -8,6 +8,10 @@ use tokio::sync::RwLock;
 pub const MIN_PORT: u16 = 25565;
 pub const MAX_PORT: u16 = 35565;
 
+fn port_available(port: u16) -> bool {
+    ["127.0.0.1", "0.0.0.0"].iter().all(|host| std::net::TcpListener::bind((*host, port)).is_ok())
+}
+
 pub struct PortAllocator {
     ports: RwLock<HashMap<String, u16>>,
 }
@@ -29,7 +33,7 @@ impl PortAllocator {
         loop {
             let allocated = ports.values().any(|allocated_port| *allocated_port == port);
 
-            if !allocated {
+            if !allocated && port_available(port) {
                 ports.insert(instance_name.to_string(), port);
                 return Ok(port);
             }
@@ -45,7 +49,7 @@ impl PortAllocator {
     pub async fn allocate(&self, instance_name: &str, port: u16) -> Result<(), Error> {
         let mut ports = self.ports.write().await;
 
-        if ports.values().any(|allocated_port| *allocated_port == port) {
+        if port == 0 || ports.values().any(|allocated_port| *allocated_port == port) || !port_available(port) {
             return Err(Error::new(
                 ErrorKind::AlreadyExists,
                 format!("Error while allocating Port: Port {port} is already allocated"),
@@ -77,10 +81,7 @@ impl PortAllocator {
     pub async fn get_corresponding_instance_name(&self, test: u16) -> Option<String> {
         let ports = self.ports.read().await;
 
-        ports
-            .iter()
-            .find(|(_, port)| **port == test)
-            .map(|(instance_name, _)| instance_name.clone())
+        ports.iter().find(|(_, port)| **port == test).map(|(instance_name, _)| instance_name.clone())
     }
 
     pub async fn get_corresponding_port(&self, instance_name: &str) -> Option<u16> {
@@ -97,5 +98,24 @@ impl PortAllocator {
     pub async fn allocated_ports(&self) -> Vec<u16> {
         let ports = self.ports.read().await;
         ports.values().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fixed_ports_reject_external_and_internal_conflicts() {
+        let allocator = PortAllocator::new();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(allocator.allocate("one", port).await.is_err());
+        drop(listener);
+        allocator.allocate("one", port).await.unwrap();
+        assert!(allocator.allocate("two", port).await.is_err());
+        assert!(allocator.allocate("zero", 0).await.is_err());
+        allocator.deallocate(port).await.unwrap();
+        allocator.allocate("two", port).await.unwrap();
     }
 }

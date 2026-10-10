@@ -29,6 +29,11 @@ fn error_status(error: Error) -> StatusCode {
     status
 }
 
+async fn shutdown(State(core): State<Arc<CloudCore>>) -> StatusCode {
+    core.request_shutdown();
+    StatusCode::ACCEPTED
+}
+
 async fn health() -> &'static str {
     "BuliCloud is running!"
 }
@@ -160,6 +165,7 @@ pub fn router(core: Arc<CloudCore>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/reload", post(reload))
+        .route("/shutdown", post(shutdown))
         .route("/paths", get(paths))
         .route("/groups", get(groups))
         .route("/groups/{name}", get(group).post(create_group).delete(delete_group))
@@ -177,5 +183,33 @@ pub fn router(core: Arc<CloudCore>) -> Router {
 
 pub async fn start_http_server(core: Arc<CloudCore>) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
-    axum::serve(listener, router(core)).await.map_err(Error::other)
+    let shutdown = Arc::clone(&core);
+    axum::serve(listener, router(core))
+        .with_graceful_shutdown(async move { shutdown.wait_for_shutdown().await })
+        .await
+        .map_err(Error::other)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn list_routes_and_shutdown_are_available() {
+        let root = tempfile::tempdir().unwrap();
+        let core = Arc::new(CloudCore::new(root.path()).await.unwrap());
+        let router = router(core.clone());
+        for path in ["/instances", "/groups", "/templates"] {
+            let response = router.clone().oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = router
+            .oneshot(Request::builder().method("POST").uri("/shutdown").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        tokio::time::timeout(std::time::Duration::from_secs(1), core.wait_for_shutdown()).await.unwrap();
+    }
 }

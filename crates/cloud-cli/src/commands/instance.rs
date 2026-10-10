@@ -8,7 +8,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error, Message};
 
 pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwest::Error> {
-    let response = http_client.get(format!("{}instances/", url)).send().await?;
+    let response = http_client.get(format!("{}instances", url)).send().await?;
     let status = response.status();
     let body = response.text().await?;
 

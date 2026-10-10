@@ -4,7 +4,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc, RwLock,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -34,17 +34,31 @@ pub(crate) struct InstanceRuntime {
     stop_tx: Option<oneshot::Sender<()>>,
     supervisor: Option<JoinHandle<Result<(), Error>>>,
     generation: u64,
+    desired: InstanceStatus,
+    ready: Arc<AtomicBool>,
+    port: Option<u16>,
+    retired: bool,
+    confirmed: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct InstanceInfo {
     instance: Instance,
     status: InstanceStatus,
+    desired: InstanceStatus,
+    role: crate::templates::template::ServiceRole,
+    endpoint: Option<String>,
+    fixed_port: Option<u16>,
+    ready: bool,
 }
 
+pub enum RuntimeExitOutcome {
+    Confirmed,
+    Unconfirmed(String),
+}
 pub enum RuntimeEvent {
     Started(String),
-    Exited(String, u64),
+    Exited { id: String, generation: u64, outcome: RuntimeExitOutcome },
 }
 
 impl InstanceInfo {
@@ -63,6 +77,7 @@ pub enum InstanceStatus {
     Running,
     Stopping,
     Stopped,
+    Failed,
 }
 
 impl InstanceRuntime {
@@ -78,6 +93,11 @@ impl InstanceRuntime {
             stop_tx: None,
             supervisor: None,
             generation: 0,
+            desired: InstanceStatus::Stopped,
+            ready: Arc::new(AtomicBool::new(false)),
+            port: None,
+            retired: false,
+            confirmed: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -85,7 +105,29 @@ impl InstanceRuntime {
         InstanceInfo {
             instance: self.instance.clone(),
             status: self.status(),
+            desired: self.desired.clone(),
+            role: self.template.role(),
+            endpoint: self
+                .port
+                .filter(|_| matches!(self.status(), InstanceStatus::Starting | InstanceStatus::Running))
+                .map(|port| std::net::SocketAddr::new(self.template.host().parse().unwrap(), port).to_string()),
+            fixed_port: self.template.port(),
+            ready: self.status() == InstanceStatus::Running && self.ready.load(Ordering::Relaxed),
         }
+    }
+
+    pub(crate) fn request_start(&mut self) -> Result<(), Error> {
+        if self.retired || !self.confirmed.load(Ordering::Relaxed) && self.status() == InstanceStatus::Failed {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Instance ownership is unresolved"));
+        }
+        self.desired = InstanceStatus::Running;
+        Ok(())
+    }
+    pub(crate) fn retire(&mut self) {
+        self.retired = true;
+    }
+    pub(crate) fn set_port(&mut self, port: u16) {
+        self.port = Some(port);
     }
 
     pub(crate) fn instance(&self) -> &Instance {
@@ -113,12 +155,17 @@ impl InstanceRuntime {
     }
 
     pub(crate) fn start(&mut self, path: &Path) -> Result<(), Error> {
+        if self.retired {
+            return Err(Error::new(ErrorKind::NotFound, "Instance was removed"));
+        }
+        self.desired = InstanceStatus::Running;
+        self.ready.store(false, Ordering::Relaxed);
         match self.status() {
             InstanceStatus::Starting | InstanceStatus::Running | InstanceStatus::Stopping => {
                 return Ok(());
             }
 
-            InstanceStatus::Stopped => {}
+            InstanceStatus::Stopped | InstanceStatus::Failed => {}
         }
 
         let jar = self.template().jar_name()?;
@@ -150,10 +197,22 @@ impl InstanceRuntime {
 
         self.command_tx = Some(command_tx);
 
-        self.spawn(command, command_rx)
+        let marker = path.join(".process");
+        let mut ownership = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&marker)
+            .map_err(|error| Error::new(error.kind(), format!("Cannot establish process ownership ({}): {error}", marker.display())))?;
+        use std::io::Write;
+        ownership.write_all(b"unconfirmed")?;
+        ownership.sync_all()?;
+        drop(ownership);
+        self.spawn(command, command_rx, marker)
     }
 
     pub(crate) async fn stop(&mut self) -> Result<(), Error> {
+        self.desired = InstanceStatus::Stopped;
+        self.ready.store(false, Ordering::Relaxed);
         if let Some(stop_tx) = self.stop_tx.take() {
             if self.status() != InstanceStatus::Stopped {
                 self.set_status(InstanceStatus::Stopping);
@@ -161,9 +220,20 @@ impl InstanceRuntime {
             let _ = stop_tx.send(());
         }
         if let Some(supervisor) = self.supervisor.as_mut() {
-            let result = supervisor.await.map_err(Error::other);
+            let result = match tokio::time::timeout(Duration::from_secs(20), &mut *supervisor).await {
+                Ok(result) => result.map_err(Error::other),
+                Err(_) => {
+                    supervisor.abort();
+                    self.set_status(InstanceStatus::Failed);
+                    return Err(Error::new(ErrorKind::TimedOut, "Supervisor shutdown timed out"));
+                }
+            };
             self.supervisor = None;
             result??;
+            self.set_status(InstanceStatus::Stopped);
+        }
+        if self.confirmed.load(Ordering::Relaxed) {
+            self.set_status(InstanceStatus::Stopped);
         }
         if self.status() != InstanceStatus::Stopped {
             return Err(Error::other("Instance process has not stopped"));
@@ -172,19 +242,27 @@ impl InstanceRuntime {
         Ok(())
     }
 
-    fn spawn(&mut self, mut command: Command, command_rx: mpsc::Receiver<RuntimeCommand>) -> Result<(), Error> {
+    fn spawn(&mut self, mut command: Command, command_rx: mpsc::Receiver<RuntimeCommand>, marker: std::path::PathBuf) -> Result<(), Error> {
         self.set_status(InstanceStatus::Starting);
 
         let mut child = match command.kill_on_drop(true).spawn() {
             Ok(child) => child,
 
             Err(error) => {
+                let _ = std::fs::remove_file(&marker);
                 self.command_tx = None;
-                self.set_status(InstanceStatus::Stopped);
+                self.set_status(InstanceStatus::Failed);
                 return Err(error);
             }
         };
 
+        self.confirmed.store(false, Ordering::Relaxed);
+        if let Some(pid) = child.id() {
+            if let Err(error) = crate::util::file_utils::atomic_write(&marker, pid.to_string().as_bytes()) {
+                self.set_status(InstanceStatus::Failed);
+                return Err(error);
+            }
+        }
         if let Some(stdout) = child.stdout.take() {
             Self::spawn_stdout_logger(&self, stdout);
         }
@@ -210,12 +288,45 @@ impl InstanceRuntime {
         let (stop_tx, stop_rx) = oneshot::channel();
         self.stop_tx = Some(stop_tx);
         self.set_status(InstanceStatus::Running);
+        let ready = Arc::clone(&self.ready);
+        let confirmed = Arc::clone(&self.confirmed);
+        let address: std::net::IpAddr = self.template.host().parse().map_err(Error::other)?;
+        let address = if address.is_unspecified() {
+            if address.is_ipv4() {
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+            } else {
+                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+            }
+        } else {
+            address
+        };
+        let endpoint = (address.to_string(), self.port.unwrap());
+        let completion = Completion {
+            id: id.clone(),
+            generation,
+            event_tx: event_tx.clone(),
+            status: status.clone(),
+            ready: ready.clone(),
+            sent: false,
+        };
         self.supervisor = Some(tokio::spawn(async move {
-            Self::supervise(child, stdin, command_rx, stop_rx, stop_command, status).await?;
-            let _ = event_tx.send(RuntimeEvent::Exited(id, generation));
-            Ok(())
-        }));
+            let mut completion = completion;
+            let result = Self::supervise(child, stdin, command_rx, stop_rx, stop_command, status, ready, endpoint).await;
 
+            if result.is_ok() {
+                confirmed.store(true, Ordering::Relaxed);
+                let _ = std::fs::remove_file(marker);
+            }
+            let outcome = match &result {
+                Ok(()) => RuntimeExitOutcome::Confirmed,
+                Err(error) => RuntimeExitOutcome::Unconfirmed(error.to_string()),
+            };
+
+            completion.sent = true;
+            let _ = event_tx.send(RuntimeEvent::Exited { id, generation, outcome });
+
+            result
+        }));
         Ok(())
     }
 
@@ -259,67 +370,110 @@ impl InstanceRuntime {
         mut stop_rx: oneshot::Receiver<()>,
         stop_command: &'static [u8],
         status: Arc<RwLock<InstanceStatus>>,
+        ready: Arc<AtomicBool>,
+        endpoint: (String, u16),
     ) -> Result<(), Error> {
-        loop {
-            tokio::select! {
-                biased;
-                _ = &mut stop_rx => {
-                    let graceful = tokio::time::timeout(Duration::from_secs(10), async {
-                        Self::write_stdin(&mut stdin, stop_command).await?;
-                        child.wait().await
-                    }).await;
-                    if !matches!(graceful, Ok(Ok(_))) {
-                        Self::terminate(&mut child).await?;
-                    }
-                    break;
-                }
-                result = child.wait() => {
-                    result?;
-                    break;
-                }
-                command = command_rx.recv() => {
-                    match command {
-                        Some(RuntimeCommand::SendCommand(command)) => {
-                            let command = format!("{command}\n");
-                            let result = tokio::time::timeout(
-                                Duration::from_secs(2), Self::write_stdin(&mut stdin, command.as_bytes())
-                            ).await;
-                            if !matches!(result, Ok(Ok(()))) {
-                                log(LogLevel::Error, "Failed to write instance command; terminating unresponsive process");
-                                Self::terminate(&mut child).await?;
-                                break;
-                            }
-                        }
-                        None => {
+        let mut probe = tokio::time::interval(Duration::from_secs(1));
+        let result: Result<(), Error> = async {
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut stop_rx => {
+                        let graceful = tokio::time::timeout(Duration::from_secs(10), async {
+                            Self::write_stdin(&mut stdin, stop_command).await?;
+                            child.wait().await
+                        }).await;
+                        if !matches!(graceful, Ok(Ok(_))) {
                             Self::terminate(&mut child).await?;
-                            break;
+                        }
+                        break;
+                    }
+                    result = child.wait() => {
+                        result?;
+                        *status.write().unwrap() = InstanceStatus::Failed;
+                        return Ok(());
+                    }
+                    _ = probe.tick() => {
+                        let connected = matches!(tokio::time::timeout(Duration::from_millis(250), tokio::net::TcpStream::connect((endpoint.0.as_str(), endpoint.1))).await, Ok(Ok(_)));
+                        ready.store(connected, Ordering::Relaxed);
+                    }
+                    command = command_rx.recv() => {
+                        match command {
+                            Some(RuntimeCommand::SendCommand(command)) => {
+                                let command = format!("{command}\n");
+                                let result = tokio::time::timeout(
+                                    Duration::from_secs(2), Self::write_stdin(&mut stdin, command.as_bytes())
+                                ).await;
+                                if !matches!(result, Ok(Ok(()))) {
+                                    log(LogLevel::Error, "Failed to write instance command; terminating unresponsive process");
+                                    let result = Self::terminate(&mut child).await;
+                                    *status.write().unwrap() = InstanceStatus::Failed;
+                                    return result;
+                                }
+                            }
+                            None => {
+                                let result = Self::terminate(&mut child).await;
+                                *status.write().unwrap() = InstanceStatus::Failed;
+                                return result;
+                            }
                         }
                     }
                 }
             }
+            *status.write().unwrap() = InstanceStatus::Stopped;
+            Ok(())
         }
-        *status.write().unwrap() = InstanceStatus::Stopped;
-        Ok(())
+        .await;
+
+        ready.store(false, Ordering::Relaxed);
+        match &result {
+            Ok(()) => {
+                if *status.read().unwrap() != InstanceStatus::Failed {
+                    *status.write().unwrap() = InstanceStatus::Stopped;
+                }
+            }
+            Err(_) => {
+                *status.write().unwrap() = InstanceStatus::Failed;
+            }
+        }
+
+        result
     }
 
     async fn terminate(child: &mut Child) -> Result<(), Error> {
-        #[cfg(windows)]
-        if child.try_wait()?.is_none() {
-            if let Some(id) = child.id() {
-                let result = Command::new("taskkill")
-                    .args(["/PID", &id.to_string(), "/T", "/F"])
-                    .creation_flags(0x08000000)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await?;
-                if result.success() {
-                    child.wait().await?;
-                    return Ok(());
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            #[cfg(windows)]
+            if child.try_wait()?.is_none() {
+                if let Some(id) = child.id() {
+                    let result = Command::new("taskkill")
+                        .args(["/PID", &id.to_string(), "/T", "/F"])
+                        .creation_flags(0x08000000)
+                        .kill_on_drop(true)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .await;
+
+                    if matches!(result, Ok(status) if status.success()) {
+                        child.wait().await?;
+                        return Ok(());
+                    }
                 }
             }
+
+            if child.try_wait()?.is_none() {
+                child.kill().await?;
+            }
+
+            child.wait().await?;
+            Ok(())
+        })
+        .await;
+
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(Error::new(ErrorKind::TimedOut, "Instance termination timed out")),
         }
-        child.kill().await
     }
 
     async fn write_stdin(stdin: &mut Option<ChildStdin>, command: &[u8]) -> Result<(), Error> {
@@ -329,6 +483,148 @@ impl InstanceRuntime {
     }
 }
 
+struct Completion {
+    id: String,
+    generation: u64,
+    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
+    status: Arc<RwLock<InstanceStatus>>,
+    ready: Arc<AtomicBool>,
+    sent: bool,
+}
+
+impl Drop for Completion {
+    fn drop(&mut self) {
+        if !self.sent {
+            *self.status.write().unwrap_or_else(|error| error.into_inner()) = InstanceStatus::Failed;
+            self.ready.store(false, Ordering::Relaxed);
+            let _ = self.event_tx.send(RuntimeEvent::Exited {
+                id: self.id.clone(),
+                generation: self.generation,
+                outcome: RuntimeExitOutcome::Unconfirmed("Supervisor interrupted".to_string()),
+            });
+        }
+    }
+}
+
 enum RuntimeCommand {
     SendCommand(String),
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::instances::instance::InstanceMode;
+
+    fn runtime() -> (InstanceRuntime, mpsc::UnboundedReceiver<RuntimeEvent>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut runtime = InstanceRuntime::new(
+            Instance::new("test-1", "test", "test".to_string(), InstanceMode::Static),
+            Template::new("test", ServerSoftware::Paper, Some("1.21".to_string()), None),
+            tx,
+        );
+        runtime.set_port(25565);
+        (runtime, rx)
+    }
+
+    #[tokio::test]
+    async fn readiness_requires_reachable_endpoint_and_clears_on_stop() {
+        let root = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let (mut runtime, _) = runtime();
+        assert!(!runtime.info().ready);
+        runtime.set_port(listener.local_addr().unwrap().port());
+        let (tx, rx) = mpsc::channel(1);
+        runtime.command_tx = Some(tx);
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/C", "set /p input="])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null());
+        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !runtime.info().ready {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        runtime.stop().await.unwrap();
+        assert!(!runtime.info().ready);
+    }
+
+    #[tokio::test]
+    async fn unexpected_exit_is_failed_but_confirmed() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, mut events) = runtime();
+        let (tx, rx) = mpsc::channel(1);
+        runtime.command_tx = Some(tx);
+        let mut command = Command::new("cmd.exe");
+        command.args(["/C", "exit /b 7"]).creation_flags(0x08000000);
+        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
+        assert!(matches!(
+            event,
+            RuntimeEvent::Exited {
+                outcome: RuntimeExitOutcome::Confirmed,
+                ..
+            }
+        ));
+        assert_eq!(runtime.status(), InstanceStatus::Failed);
+        assert!(!runtime.info().ready);
+        assert!(!root.path().join(".process").exists());
+        runtime.stop().await.unwrap();
+        assert_eq!(runtime.status(), InstanceStatus::Stopped);
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_process_and_emits_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, mut events) = runtime();
+        let (tx, rx) = mpsc::channel(1);
+        runtime.command_tx = Some(tx);
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/C", "set /p input="])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null());
+        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
+        runtime.stop().await.unwrap();
+        assert_eq!(runtime.status(), InstanceStatus::Stopped);
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            RuntimeEvent::Exited {
+                outcome: RuntimeExitOutcome::Confirmed,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn aborted_supervisor_emits_unconfirmed_completion() {
+        let root = tempfile::tempdir().unwrap();
+        let (mut runtime, mut events) = runtime();
+        let (tx, rx) = mpsc::channel(1);
+        runtime.command_tx = Some(tx);
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/C", "set /p input="])
+            .creation_flags(0x08000000)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null());
+        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
+        runtime.supervisor.as_ref().unwrap().abort();
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
+        assert!(matches!(
+            event,
+            RuntimeEvent::Exited {
+                outcome: RuntimeExitOutcome::Unconfirmed(_),
+                ..
+            }
+        ));
+        assert_eq!(runtime.status(), InstanceStatus::Failed);
+        assert!(root.path().join(".process").exists());
+        assert!(runtime.request_start().is_err());
+    }
 }

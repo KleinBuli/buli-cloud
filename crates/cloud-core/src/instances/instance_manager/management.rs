@@ -15,8 +15,8 @@ impl InstanceManager {
     pub async fn cleanup_instance(&self, id: &str) -> Result<(), Error> {
         validate_name(id)?;
 
-        let state = self.state.lock().await;
-        let runtime = state.get(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
+        let runtime = self.runtime(id).await?;
+        let runtime = runtime.lock().await;
         if runtime.status() != InstanceStatus::Stopped {
             return Err(Error::new(ErrorKind::ResourceBusy, "Instance has not stopped"));
         }
@@ -62,6 +62,9 @@ impl InstanceManager {
         template.jar_name()?;
 
         let mut state = self.state.lock().await;
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
+        }
         let instance_mode = if template.is_static_instance() {
             InstanceMode::Static
         } else {
@@ -72,7 +75,14 @@ impl InstanceManager {
 
             if !state.contains_key(&id) && !self.running_path.join(&id).try_exists()? && !self.static_path.join(&id).try_exists()? {
                 let instance = Instance::new(&id, group, template.name().to_string(), instance_mode);
-                state.insert(id, InstanceRuntime::new(instance.clone(), template.clone(), self.event_tx.clone()));
+                state.insert(
+                    id,
+                    std::sync::Arc::new(tokio::sync::Mutex::new(InstanceRuntime::new(
+                        instance.clone(),
+                        template.clone(),
+                        self.event_tx.clone(),
+                    ))),
+                );
                 return Ok(instance);
             }
         }
@@ -81,6 +91,9 @@ impl InstanceManager {
 
     pub async fn register_instance(&self, instance: Instance, template: Template) -> Result<(), Error> {
         let mut state = self.state.lock().await;
+        if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
+        }
 
         if state.contains_key(instance.id()) {
             return Err(Error::new(ErrorKind::AlreadyExists, "Instance already registered"));
@@ -88,7 +101,7 @@ impl InstanceManager {
 
         state.insert(
             instance.id().to_string(),
-            InstanceRuntime::new(instance.clone(), template, self.event_tx.clone()),
+            std::sync::Arc::new(tokio::sync::Mutex::new(InstanceRuntime::new(instance.clone(), template, self.event_tx.clone()))),
         );
 
         Ok(())
@@ -118,7 +131,7 @@ impl InstanceManager {
 
             let name = entry.file_name().to_string_lossy().to_string();
 
-            if validate_name(&name).is_err() {
+            if name.starts_with('.') || validate_name(&name).is_err() {
                 continue;
             }
 
@@ -132,8 +145,8 @@ impl InstanceManager {
 
     pub(crate) async fn remove_instance_with_files(&self, id: &str) -> Result<(), Error> {
         validate_name(id)?;
-        let mut state = self.state.lock().await;
-        let runtime = state.get_mut(id).ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
+        let runtime = self.runtime(id).await?;
+        let mut runtime = runtime.lock().await;
         runtime.stop().await?;
         let path = self.working_directory(runtime.instance());
         let root = match runtime.instance().instance_mode() {
@@ -144,18 +157,20 @@ impl InstanceManager {
         if let Some(port) = self.port_allocator.get_corresponding_port(id).await {
             self.port_allocator.deallocate(port).await?;
         }
-        state.remove(id);
+        runtime.retire();
+        self.state.lock().await.remove(id);
         if let Some(staged) = staged {
-            staged.commit();
+            staged.commit()?;
         }
         Ok(())
     }
 
     pub(crate) async fn remove_instance(&self, id: &str) -> Result<Option<Instance>, Error> {
-        let mut state = self.state.lock().await;
-        if state.get(id).is_some_and(|entry| entry.status() != InstanceStatus::Stopped) {
+        let runtime = self.runtime(id).await?;
+        let runtime = runtime.lock().await;
+        if runtime.status() != InstanceStatus::Stopped {
             return Err(Error::new(ErrorKind::ResourceBusy, "Instance is still running"));
         }
-        Ok(state.remove(id).map(|entry| entry.instance().clone()))
+        Ok(self.state.lock().await.remove(id).map(|_| runtime.instance().clone()))
     }
 }

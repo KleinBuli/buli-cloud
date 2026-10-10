@@ -106,6 +106,9 @@ impl TemplateManager {
             return Err(Error::new(ErrorKind::InvalidData, "Template metadata name does not match configuration key"));
         }
 
+        if template.port() == Some(0) || template.host().parse::<std::net::IpAddr>().is_err() {
+            return Err(Error::new(ErrorKind::InvalidData, "Service requires an IP address and a nonzero port"));
+        }
         validate_name(&template.jar_name()?)?;
         Ok(())
     }
@@ -119,14 +122,18 @@ impl TemplateManager {
         Ok(())
     }
 
-    pub(crate) async fn load_group_templates(&self, group: &str, names: &[String], global_version: &str) -> Result<(), Error> {
+    pub(crate) async fn load_group_templates(&self, group: &str, names: &[String]) -> Result<(), Error> {
         let mut templates = self.templates.write().await;
-        let mut config = self.read_group_config(group)?;
+        let config = self.read_group_config(group)?;
         let mut loaded = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        let mut changed = false;
+        let changed = false;
 
         for name in names {
+            if name == "global" {
+                continue;
+            }
+
             if !seen.insert(name.to_ascii_lowercase()) {
                 return Err(Error::new(ErrorKind::InvalidData, "Template names must be unique regardless of case"));
             }
@@ -138,18 +145,10 @@ impl TemplateManager {
                     return Err(Error::new(ErrorKind::InvalidData, "Template name case differs from group configuration"));
                 }
 
-                let template = if name == "global" {
-                    Template::new(name, ServerSoftware::Paper, Some(global_version.to_string()), None)
-                } else {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Missing metadata for {name}. Add [templates.{name}] to {group}/{GROUP_CONFIG}."),
-                    ));
-                };
-
-                config.templates.insert(name.clone(), template.clone());
-                changed = true;
-                template
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Missing metadata for {name}. Add [templates.{name}] to {group}/{GROUP_CONFIG}."),
+                ));
             };
             self.validate_template(group, name, &template)?;
             loaded.push(((group.to_string(), name.clone()), template));
@@ -162,32 +161,27 @@ impl TemplateManager {
         Ok(())
     }
 
-    pub(crate) fn prepare_reload(
-        &self,
-        groups: &HashMap<String, crate::groups::group::Group>,
-        global_version: &str,
-    ) -> Result<HashMap<(String, String), Template>, Error> {
+    pub(crate) fn prepare_reload(&self, groups: &HashMap<String, crate::groups::group::Group>) -> Result<HashMap<(String, String), Template>, Error> {
         let mut loaded = HashMap::new();
         for group in groups.values() {
             if group.path() != &self.templates_path.join(group.name()) {
                 return Err(Error::new(ErrorKind::InvalidData, "Group path does not match template directory"));
             }
-            if !group.template_names().iter().any(|name| name == "global") {
-                return Err(Error::new(ErrorKind::InvalidData, "The global template is required"));
-            }
+            std::fs::create_dir_all(self.templates_path.join(group.name()).join("global"))?;
             let config = self.read_group_config(group.name())?;
             let mut seen = std::collections::HashSet::new();
             for name in group.template_names() {
+                if name == "global" {
+                    continue;
+                }
                 if !seen.insert(name.to_ascii_lowercase()) {
                     return Err(Error::new(ErrorKind::InvalidData, "Duplicate template name"));
                 }
-                let template = match config.templates.get(name) {
-                    Some(template) => template.clone(),
-                    None if name == "global" && !config.templates.keys().any(|key| key.eq_ignore_ascii_case(name)) => {
-                        Template::new(name, ServerSoftware::Paper, Some(global_version.to_string()), None)
-                    }
-                    None => return Err(Error::new(ErrorKind::InvalidData, format!("Missing metadata for {name}"))),
-                };
+                let template = config
+                    .templates
+                    .get(name)
+                    .ok_or_else(|| Error::new(ErrorKind::InvalidData, format!("Missing metadata for {name}")))?
+                    .clone();
                 self.validate_template(group.name(), name, &template)?;
                 loaded.insert((group.name().to_string(), name.clone()), template);
             }
@@ -207,6 +201,10 @@ impl TemplateManager {
         version: Option<String>,
         custom_jar_name: Option<String>,
     ) -> Result<(), Error> {
+        if name.eq_ignore_ascii_case("global") {
+            return Err(Error::new(ErrorKind::InvalidInput, "'global' is an invalid template name"));
+        }
+
         let mut templates = self.templates.write().await;
         let path = self.checked_path(group, name)?;
         let mut config = self.read_group_config(group)?;
@@ -255,6 +253,10 @@ impl TemplateManager {
     }
 
     pub(crate) async fn forget_template(&self, group: &str, name: &str) -> Result<(), Error> {
+        if name.eq_ignore_ascii_case("global") {
+            return Ok(());
+        }
+
         let mut templates = self.templates.write().await;
         self.checked_path(group, name)?;
         let mut config = self.read_group_config(group)?;
@@ -270,6 +272,9 @@ impl TemplateManager {
     }
 
     pub fn get_template_path(&self, group: &str, name: &str) -> Option<PathBuf> {
+        if name.eq_ignore_ascii_case("global") {
+            return None;
+        }
         self.checked_path(group, name).ok().filter(|path| path.is_dir())
     }
 
@@ -285,6 +290,10 @@ impl TemplateManager {
     }
 
     pub async fn get_template(&self, group: &str, name: &str) -> Option<Template> {
+        if name.eq_ignore_ascii_case("global") {
+            return None;
+        }
+
         self.templates.read().await.get(&(group.to_string(), name.to_string())).cloned()
     }
 
