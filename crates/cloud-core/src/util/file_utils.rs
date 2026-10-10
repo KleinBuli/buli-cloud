@@ -111,7 +111,7 @@ pub fn set_server_property(properties_path: &Path, key: &str, value: &str) -> Re
 
     let mut found = false;
 
-    let lines = content
+    let mut lines = content
         .lines()
         .map(|line| {
             if line.starts_with(&target) {
@@ -122,6 +122,9 @@ pub fn set_server_property(properties_path: &Path, key: &str, value: &str) -> Re
             }
         })
         .collect::<Vec<_>>();
-    fs::write(properties_path, lines.join("\n"))?;
+    if !found {
+        lines.push(format!("{key}={value}"));
+    }
+    atomic_write(properties_path, lines.join("\n").as_bytes())?;
     Ok(())
 }

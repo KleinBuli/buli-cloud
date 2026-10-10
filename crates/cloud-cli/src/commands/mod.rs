@@ -3,12 +3,23 @@ use reqwest::Client;
 use crate::cli::{self, Cli};
 
 mod group;
+mod help;
 mod instance;
+mod reload;
 mod template;
 
 pub(crate) async fn parse_commands(http_client: &Client, url: String, cli: Cli) -> Result<bool, reqwest::Error> {
     match cli.command {
         Some(command) => match command {
+            cli::Commands::Instances => instance::list(http_client, &url).await,
+
+            cli::Commands::Help {} => {
+                help::print_help();
+                Ok(true)
+            }
+
+            cli::Commands::Reload {} => reload::reload(http_client, &url).await,
+
             cli::Commands::Console { instance } => {
                 match instance::console(&url, &instance).await {
                     Ok(_) => {}
@@ -21,15 +32,12 @@ pub(crate) async fn parse_commands(http_client: &Client, url: String, cli: Cli) 
 
             cli::Commands::Group { command } => match command {
                 cli::GroupCommands::Create { name } => group::create(http_client, &url, name).await,
+                cli::GroupCommands::List => group::list(http_client, &url).await,
             },
 
             cli::Commands::Template { command } => match command {
-                cli::TemplateCommands::Create {
-                    group,
-                    name,
-                    proxy,
-                    server: _,
-                } => template::create(http_client, &url, group, name, proxy).await,
+                cli::TemplateCommands::Create { group, name, proxy, server: _ } => template::create(http_client, &url, group, name, proxy).await,
+                cli::TemplateCommands::List => template::list(http_client, &url).await,
             },
 
             cli::Commands::Start { group, template } => instance::start(http_client, &url, group, template).await,

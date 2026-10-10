@@ -2,7 +2,10 @@ use std::{
     io::{Error, ErrorKind},
     path::Path,
     process::Stdio,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -10,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
-    sync::{broadcast, mpsc},
+    sync::{broadcast, mpsc, oneshot},
+    task::JoinHandle,
 };
 
 use crate::{
@@ -24,9 +28,12 @@ pub(crate) struct InstanceRuntime {
     instance: Instance,
     template: Template,
     command_tx: Option<mpsc::Sender<RuntimeCommand>>,
-    event_tx: mpsc::Sender<RuntimeEvent>,
+    event_tx: mpsc::UnboundedSender<RuntimeEvent>,
     status: Arc<RwLock<InstanceStatus>>,
     console_tx: broadcast::Sender<String>,
+    stop_tx: Option<oneshot::Sender<()>>,
+    supervisor: Option<JoinHandle<Result<(), Error>>>,
+    generation: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -35,15 +42,9 @@ pub struct InstanceInfo {
     status: InstanceStatus,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum InstanceMode {
-    Dynamic,
-    Static,
-}
-
 pub enum RuntimeEvent {
     Started(String),
-    Exited(String),
+    Exited(String, u64),
 }
 
 impl InstanceInfo {
@@ -65,7 +66,7 @@ pub enum InstanceStatus {
 }
 
 impl InstanceRuntime {
-    pub(crate) fn new(instance: Instance, template: Template, event_tx: mpsc::Sender<RuntimeEvent>) -> Self {
+    pub(crate) fn new(instance: Instance, template: Template, event_tx: mpsc::UnboundedSender<RuntimeEvent>) -> Self {
         let (console_tx, _) = broadcast::channel(256);
         Self {
             instance,
@@ -74,6 +75,9 @@ impl InstanceRuntime {
             command_tx: None,
             status: Arc::new(RwLock::new(Stopped)),
             console_tx,
+            stop_tx: None,
+            supervisor: None,
+            generation: 0,
         }
     }
 
@@ -92,6 +96,10 @@ impl InstanceRuntime {
         self.status.read().unwrap().clone()
     }
 
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub(crate) fn template(&self) -> &Template {
         &self.template
     }
@@ -105,14 +113,6 @@ impl InstanceRuntime {
     }
 
     pub(crate) fn start(&mut self, path: &Path) -> Result<(), Error> {
-        let sender_closed = self.command_tx.as_ref().is_some_and(|tx| tx.is_closed());
-
-        if sender_closed {
-            self.command_tx = None;
-            self.set_status(InstanceStatus::Stopped);
-            return Ok(());
-        }
-
         match self.status() {
             InstanceStatus::Starting | InstanceStatus::Running | InstanceStatus::Stopping => {
                 return Ok(());
@@ -122,7 +122,6 @@ impl InstanceRuntime {
         }
 
         let jar = self.template().jar_name()?;
-        let software = self.template().server_software();
 
         if !path.join(&jar).is_file() {
             return Err(Error::new(ErrorKind::NotFound, format!("Instance executable missing: {jar}")));
@@ -155,25 +154,21 @@ impl InstanceRuntime {
     }
 
     pub(crate) async fn stop(&mut self) -> Result<(), Error> {
-        let sender_closed = self.command_tx.as_ref().is_some_and(|tx| tx.is_closed());
-
-        if sender_closed {
-            self.command_tx = None;
-            self.set_status(InstanceStatus::Stopped);
-            return Ok(());
+        if let Some(stop_tx) = self.stop_tx.take() {
+            if self.status() != InstanceStatus::Stopped {
+                self.set_status(InstanceStatus::Stopping);
+            }
+            let _ = stop_tx.send(());
         }
-
-        let Some(command_tx) = self.command_tx.clone() else {
-            return Ok(());
-        };
-
-        self.set_status(InstanceStatus::Stopping);
-
-        command_tx
-            .send(RuntimeCommand::Stop)
-            .await
-            .map_err(|_| Error::other("Runtime supervisor unavailable"))?;
-
+        if let Some(supervisor) = self.supervisor.as_mut() {
+            let result = supervisor.await.map_err(Error::other);
+            self.supervisor = None;
+            result??;
+        }
+        if self.status() != InstanceStatus::Stopped {
+            return Err(Error::other("Instance process has not stopped"));
+        }
+        self.command_tx = None;
         Ok(())
     }
 
@@ -184,6 +179,7 @@ impl InstanceRuntime {
             Ok(child) => child,
 
             Err(error) => {
+                self.command_tx = None;
                 self.set_status(InstanceStatus::Stopped);
                 return Err(error);
             }
@@ -208,9 +204,17 @@ impl InstanceRuntime {
             b"stop\n"
         };
 
-        tokio::spawn(Self::supervise(child, stdin, command_rx, stop_command, status, id, event_tx));
-
+        static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
+        self.generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
+        let generation = self.generation;
+        let (stop_tx, stop_rx) = oneshot::channel();
+        self.stop_tx = Some(stop_tx);
         self.set_status(InstanceStatus::Running);
+        self.supervisor = Some(tokio::spawn(async move {
+            Self::supervise(child, stdin, command_rx, stop_rx, stop_command, status).await?;
+            let _ = event_tx.send(RuntimeEvent::Exited(id, generation));
+            Ok(())
+        }));
 
         Ok(())
     }
@@ -238,15 +242,12 @@ impl InstanceRuntime {
     }
 
     pub async fn execute_command(&self, command: String) -> Result<(), Error> {
-        let command_tx = self
-            .command_tx
-            .as_ref()
-            .ok_or_else(|| Error::other("Instance runtime is not running"))?;
+        let command_tx = self.command_tx.as_ref().ok_or_else(|| Error::other("Instance runtime is not running"))?;
 
-        command_tx
-            .send(RuntimeCommand::SendCommand(command))
-            .await
-            .map_err(|_| Error::other("Runtime supervisor unavailable"))?;
+        command_tx.try_send(RuntimeCommand::SendCommand(command)).map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => Error::new(ErrorKind::WouldBlock, "Instance command queue is full"),
+            mpsc::error::TrySendError::Closed(_) => Error::other("Runtime supervisor unavailable"),
+        })?;
 
         Ok(())
     }
@@ -255,174 +256,79 @@ impl InstanceRuntime {
         mut child: Child,
         mut stdin: Option<ChildStdin>,
         mut command_rx: mpsc::Receiver<RuntimeCommand>,
+        mut stop_rx: oneshot::Receiver<()>,
         stop_command: &'static [u8],
         status: Arc<RwLock<InstanceStatus>>,
-        id: String,
-        event_tx: mpsc::Sender<RuntimeEvent>,
-    ) {
+    ) -> Result<(), Error> {
         loop {
             tokio::select! {
+                biased;
+                _ = &mut stop_rx => {
+                    let graceful = tokio::time::timeout(Duration::from_secs(10), async {
+                        Self::write_stdin(&mut stdin, stop_command).await?;
+                        child.wait().await
+                    }).await;
+                    if !matches!(graceful, Ok(Ok(_))) {
+                        Self::terminate(&mut child).await?;
+                    }
+                    break;
+                }
+                result = child.wait() => {
+                    result?;
+                    break;
+                }
                 command = command_rx.recv() => {
                     match command {
-                        Some(RuntimeCommand::Stop) => {
-                            if Self::stop_process(
-                                &mut child,
-                                &mut stdin,
-                                stop_command,
-                                &status,
-                                &id,
-                            ).await {
+                        Some(RuntimeCommand::SendCommand(command)) => {
+                            let command = format!("{command}\n");
+                            let result = tokio::time::timeout(
+                                Duration::from_secs(2), Self::write_stdin(&mut stdin, command.as_bytes())
+                            ).await;
+                            if !matches!(result, Ok(Ok(()))) {
+                                log(LogLevel::Error, "Failed to write instance command; terminating unresponsive process");
+                                Self::terminate(&mut child).await?;
                                 break;
                             }
                         }
-
-                        Some(RuntimeCommand::SendCommand(cmd)) => {
-                            Self::send_command(
-                                &mut stdin,
-                                cmd,
-                            ).await;
-                        }
-
                         None => {
+                            Self::terminate(&mut child).await?;
                             break;
                         }
                     }
                 }
-
-                result = child.wait() => {
-                    Self::handle_process_exit(
-                        result,
-                        &status,
-                    );
-                    break;
-                }
             }
         }
-
-        // A closed command channel can end the loop while the process is still alive.
-        match child.try_wait() {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                if let Err(error) = child.kill().await {
-                    log(LogLevel::Error, &format!("Failed to terminate instance {id}: {error}"));
-                    return;
-                }
-            }
-            Err(error) => {
-                log(LogLevel::Error, &format!("Failed to confirm instance {id} exited: {error}"));
-                return;
-            }
-        }
-
         *status.write().unwrap() = InstanceStatus::Stopped;
-        let _ = event_tx.send(RuntimeEvent::Exited(id)).await;
+        Ok(())
     }
 
-    async fn stop_process(
-        child: &mut Child,
-        stdin: &mut Option<ChildStdin>,
-        stop_command: &'static [u8],
-        status: &Arc<RwLock<InstanceStatus>>,
-        id: &str,
-    ) -> bool {
-        let Some(stdin) = stdin.as_mut() else {
-            return false;
-        };
-
-        if let Err(error) = stdin.write_all(stop_command).await {
-            log(LogLevel::Error, &format!("Failed to send stop command: {error}"));
-        }
-
-        if let Err(error) = stdin.flush().await {
-            log(LogLevel::Error, &format!("Failed to flush stop command: {error}"));
-        }
-
-        let graceful = tokio::time::timeout(Duration::from_secs(10), child.wait()).await;
-
-        match graceful {
-            Ok(Ok(exit_status)) => {
-                log(LogLevel::Info, &format!("Instance stopped with status: {exit_status}"));
-
-                *status.write().unwrap() = InstanceStatus::Stopped;
-
-                true
-            }
-
-            Ok(Err(error)) => {
-                log(LogLevel::Error, &format!("Failed while waiting for instance shutdown: {error} "));
-
-                match child.kill().await {
-                    Ok(_) => {
-                        *status.write().unwrap() = InstanceStatus::Stopped;
-                    }
-
-                    Err(kill_error) => {
-                        log(LogLevel::Error, &format!("Error while killing instance {id}: {kill_error}"));
-                    }
+    async fn terminate(child: &mut Child) -> Result<(), Error> {
+        #[cfg(windows)]
+        if child.try_wait()?.is_none() {
+            if let Some(id) = child.id() {
+                let result = Command::new("taskkill")
+                    .args(["/PID", &id.to_string(), "/T", "/F"])
+                    .creation_flags(0x08000000)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await?;
+                if result.success() {
+                    child.wait().await?;
+                    return Ok(());
                 }
-
-                true
-            }
-
-            Err(_) => {
-                log(
-                    LogLevel::Warn,
-                    &format!("Instance {id} did not stop within 10 seconds. Killing process."),
-                );
-
-                match child.kill().await {
-                    Ok(_) => match child.wait().await {
-                        Ok(exit_status) => {
-                            log(LogLevel::Info, &format!("Instance {id} killed with status: {exit_status}"));
-
-                            *status.write().unwrap() = InstanceStatus::Stopped;
-                        }
-
-                        Err(error) => {
-                            log(LogLevel::Error, &format!("Failed waiting for killed instance {id}: {error}"));
-                        }
-                    },
-
-                    Err(error) => {
-                        log(LogLevel::Error, &format!("Error while killing instance {id}: {error}"));
-                    }
-                }
-
-                true
             }
         }
+        child.kill().await
     }
 
-    async fn send_command(stdin: &mut Option<ChildStdin>, cmd: String) {
-        if let Some(stdin) = stdin.as_mut() {
-            let command = format!("{cmd}\n");
-
-            if let Err(error) = stdin.write_all(command.as_bytes()).await {
-                log(LogLevel::Error, &format!("Failed to send command: {error}"));
-            }
-
-            if let Err(error) = stdin.flush().await {
-                log(LogLevel::Error, &format!("Failed to flush command: {error}"));
-            }
-        }
-    }
-
-    fn handle_process_exit(result: Result<std::process::ExitStatus, Error>, status: &Arc<RwLock<InstanceStatus>>) {
-        match result {
-            Ok(exit_status) => {
-                log(LogLevel::Info, &format!("Instance exited with status: {exit_status}"));
-            }
-
-            Err(error) => {
-                log(LogLevel::Error, &format!("Failed waiting for instance process: {error}"));
-            }
-        }
-
-        *status.write().unwrap() = InstanceStatus::Stopped;
+    async fn write_stdin(stdin: &mut Option<ChildStdin>, command: &[u8]) -> Result<(), Error> {
+        let stdin = stdin.as_mut().ok_or_else(|| Error::other("Instance stdin unavailable"))?;
+        stdin.write_all(command).await?;
+        stdin.flush().await
     }
 }
 
 enum RuntimeCommand {
-    Stop,
     SendCommand(String),
 }

@@ -62,12 +62,12 @@ impl fmt::Display for LogLevel {
 pub fn log(level: LogLevel, text: &str) {
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
 
-    match level {
-        LogLevel::Error => {
-            eprintln!("[{timestamp}] [{level}] - {text}");
-        }
-        _ => {
-            println!("[{timestamp}] [{level}] - {text}");
-        }
-    }
+    let (color, label) = match level {
+        LogLevel::Info => ("\x1b[32m", "INFO"),
+        LogLevel::Warn => ("\x1b[33m", "WARN"),
+        LogLevel::Error => ("\x1b[31m", "ERROR"),
+        LogLevel::Debug => ("\x1b[36m", "DEBUG"),
+    };
+
+    println!("[{timestamp}] {color}[{label}]\x1b[0m {text}");
 }

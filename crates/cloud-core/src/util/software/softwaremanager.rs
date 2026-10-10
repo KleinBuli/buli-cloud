@@ -5,12 +5,15 @@ use std::{
     fmt,
     fs::File,
     io::{Error, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 use tokio::fs;
 use zip::ZipArchive;
 
-use crate::logger::logger::{LogLevel::Info, log};
+use crate::{
+    logger::logger::{LogLevel::Info, log},
+    util::file_utils::atomic_write,
+};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum ServerSoftware {
@@ -65,18 +68,6 @@ impl ServerSoftwareManager {
         }
 
         log(Info, "Checking cached mojang-mapping...");
-        let file_name = format!("mojang_{}.jar", minecraft_version);
-        let file_path = self.download_path.join("cache").join(file_name);
-
-        if file_path.exists() {
-            log(Info, "Mojang .jar already cached and ready-to-start.");
-            return Ok(());
-        }
-
-        log(
-            Info,
-            &format!("No mojang .jar found for {minecraft_version}. Trying to download mojang_{minecraft_version}.jar..."),
-        );
 
         self.handle_mojang_download(minecraft_version).await?;
 
@@ -106,6 +97,8 @@ impl ServerSoftwareManager {
             .send()
             .await
             .map_err(|e| Error::other(e))?
+            .error_for_status()
+            .map_err(Error::other)?
             .json::<Vec<PaperBuild>>()
             .await
             .map_err(|e| Error::other(e))?;
@@ -126,11 +119,13 @@ impl ServerSoftwareManager {
             .send()
             .await
             .map_err(|e| Error::other(e))?
+            .error_for_status()
+            .map_err(Error::other)?
             .bytes()
             .await
             .map_err(|e| Error::other(e))?;
 
-        tokio::fs::write(file_path, bytes).await?;
+        Self::save_jar(&file_path, &bytes)?;
         log(Info, "Downloaded papermc successfully.");
 
         Ok(())
@@ -141,7 +136,7 @@ impl ServerSoftwareManager {
 
         let file_path = self.download_path.join("velocity.jar");
 
-        if file_path.try_exists()? {
+        if Self::valid_jar(&file_path) {
             log(Info, "Velocity jar already cached.");
             return Ok(());
         }
@@ -214,15 +209,9 @@ impl ServerSoftwareManager {
                 Ok(self.download_path.join("velocity.jar"))
             }
 
-            ServerSoftware::Vanilla => Err(Error::new(
-                std::io::ErrorKind::Unsupported,
-                "Vanilla downloads are not implemented yet",
-            )),
+            ServerSoftware::Vanilla => Err(Error::new(std::io::ErrorKind::Unsupported, "Vanilla downloads are not implemented yet")),
 
-            ServerSoftware::Custom => Err(Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Custom JARs are stored inside templates",
-            )),
+            ServerSoftware::Custom => Err(Error::new(std::io::ErrorKind::InvalidInput, "Custom JARs are stored inside templates")),
         }
     }
 
@@ -267,7 +256,7 @@ impl ServerSoftwareManager {
             .map_err(Error::other)?;
 
         tokio::fs::create_dir_all(&self.download_path).await?;
-        tokio::fs::write(destination, bytes).await?;
+        Self::save_jar(destination, &bytes)?;
 
         Ok(true)
     }
@@ -316,13 +305,22 @@ impl ServerSoftwareManager {
             return Err(Error::new(std::io::ErrorKind::InvalidData, "SHA-256 checksum mismatch"));
         }
 
-        tokio::fs::write(file_path, bytes).await?;
+        Self::save_jar(&file_path, &bytes)?;
         log(Info, "Downloaded mojang mappings successfully.");
 
         Ok(())
     }
 
     fn paper_exists(&self, minecraft_version: &str) -> bool {
-        self.download_path.join(&format!("paper-{minecraft_version}.jar")).is_file()
+        Self::valid_jar(&self.download_path.join(format!("paper-{minecraft_version}.jar")))
+    }
+
+    fn valid_jar(path: &Path) -> bool {
+        File::open(path).ok().and_then(|file| ZipArchive::new(file).ok()).is_some()
+    }
+
+    fn save_jar(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+        ZipArchive::new(std::io::Cursor::new(bytes))?;
+        atomic_write(path, bytes)
     }
 }

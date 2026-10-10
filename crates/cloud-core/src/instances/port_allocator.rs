@@ -22,6 +22,9 @@ impl PortAllocator {
     pub async fn allocate_next(&self, instance_name: &str) -> Result<u16, Error> {
         let mut ports = self.ports.write().await;
 
+        if let Some(port) = ports.get(instance_name) {
+            return Ok(*port);
+        }
         let mut port = MIN_PORT;
         loop {
             let allocated = ports.values().any(|allocated_port| *allocated_port == port);

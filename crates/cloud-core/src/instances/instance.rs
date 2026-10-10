@@ -1,17 +1,21 @@
 use serde::{Deserialize, Serialize};
 
-use crate::instances::instance_runtime::InstanceMode;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Instance {
     id: String,
     group_name: String,
-    template_name: Option<String>,
+    template_name: String,
     instance_mode: InstanceMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InstanceMode {
+    Dynamic,
+    Static,
+}
+
 impl Instance {
-    pub fn new(id: &str, group_name: &str, template_name: Option<String>, instance_mode: InstanceMode) -> Self {
+    pub fn new(id: &str, group_name: &str, template_name: String, instance_mode: InstanceMode) -> Self {
         Self {
             id: id.to_string(),
             template_name,
@@ -28,8 +32,8 @@ impl Instance {
         &self.group_name
     }
 
-    pub fn template_name(&self) -> Option<&str> {
-        self.template_name.as_deref()
+    pub fn template_name(&self) -> &str {
+        &self.template_name
     }
 
     pub fn instance_mode(&self) -> &InstanceMode {

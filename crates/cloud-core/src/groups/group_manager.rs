@@ -43,7 +43,16 @@ impl GroupManager {
     }
 
     pub(crate) async fn load_groups_from_config(&self) -> Result<(), Error> {
-        let mut groups = self.groups.write().await;
+        let loaded = self.read_groups_from_config()?;
+        self.replace_groups(loaded).await;
+        Ok(())
+    }
+
+    pub(crate) async fn replace_groups(&self, groups: HashMap<String, Group>) {
+        *self.groups.write().await = groups;
+    }
+
+    pub(crate) fn read_groups_from_config(&self) -> Result<HashMap<String, Group>, Error> {
         let content = fs::read_to_string(&self.config_path)?;
         let config: GroupsConfig = toml::from_str(&content).map_err(Error::other)?;
         let mut loaded = HashMap::new();
@@ -62,8 +71,7 @@ impl GroupManager {
             group.set_maintenance(config.maintenance);
             loaded.insert(name, group);
         }
-        *groups = loaded;
-        Ok(())
+        Ok(loaded)
     }
 
     fn persist(&self, groups: &HashMap<String, Group>) -> Result<(), Error> {

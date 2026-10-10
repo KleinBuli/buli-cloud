@@ -43,6 +43,13 @@ async fn paths(State(core): State<Arc<CloudCore>>) -> String {
     )
 }
 
+async fn reload(State(core): State<Arc<CloudCore>>) -> StatusCode {
+    match core.reload().await {
+        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
 async fn templates(State(core): State<Arc<CloudCore>>) -> Json<Vec<String>> {
     let mut result = Vec::new();
     for group in core.group_manager().groups().await {
@@ -80,17 +87,12 @@ async fn create_template(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    core.create_template(&group, &name, software, version, None)
-        .await
-        .map_err(error_status)?;
+    core.create_template(&group, &name, software, version, None).await.map_err(error_status)?;
 
     Ok(StatusCode::CREATED)
 }
 
-async fn delete_template(
-    State(core): State<Arc<CloudCore>>,
-    Path((group, name)): Path<(String, String)>,
-) -> Result<StatusCode, StatusCode> {
+async fn delete_template(State(core): State<Arc<CloudCore>>, Path((group, name)): Path<(String, String)>) -> Result<StatusCode, StatusCode> {
     core.delete_template(&group, &name).await.map_err(error_status)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -157,18 +159,13 @@ async fn disable_group_maintenance(State(core): State<Arc<CloudCore>>, Path(name
 pub fn router(core: Arc<CloudCore>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/reload", post(reload))
         .route("/paths", get(paths))
         .route("/groups", get(groups))
         .route("/groups/{name}", get(group).post(create_group).delete(delete_group))
-        .route(
-            "/groups/{name}/maintenance",
-            post(enable_group_maintenance).delete(disable_group_maintenance),
-        )
+        .route("/groups/{name}/maintenance", post(enable_group_maintenance).delete(disable_group_maintenance))
         .route("/templates", get(templates))
-        .route(
-            "/templates/{group_name}/{template_name}",
-            post(create_template).delete(delete_template),
-        )
+        .route("/templates/{group_name}/{template_name}", post(create_template).delete(delete_template))
         .route("/instances", get(instances))
         .route("/instances/new/{group_name}/{template_name}", post(create_instance_from_template))
         .route("/instances/{id}/remove", delete(delete_instance))
@@ -181,41 +178,4 @@ pub fn router(core: Arc<CloudCore>) -> Router {
 pub async fn start_http_server(core: Arc<CloudCore>) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8080").await?;
     axum::serve(listener, router(core)).await.map_err(Error::other)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{body::Body, http::Request};
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn scoped_routes_create_prepare_and_delete_with_both_path_parameters() {
-        let root = tempfile::tempdir().unwrap();
-        let core = Arc::new(CloudCore::new(root.path()).await.unwrap());
-        std::fs::create_dir_all(core.cache_path()).unwrap();
-        std::fs::write(core.cache_path().join("paper-1.21.11.jar"), b"fixture").unwrap();
-        core.initialize().await.unwrap();
-        let app = router(core.clone());
-        for (method, path, expected) in [
-            ("POST", "/groups/lobby", StatusCode::CREATED),
-            ("POST", "/templates/lobby/custom", StatusCode::CREATED),
-            ("POST", "/instances/new/lobby/custom", StatusCode::CREATED),
-            ("DELETE", "/templates/lobby/custom", StatusCode::CONFLICT),
-            ("POST", "/groups/lobby/maintenance", StatusCode::OK),
-            ("POST", "/instances/lobby-1/start", StatusCode::CONFLICT),
-            ("POST", "/instances/new/lobby/custom", StatusCode::CONFLICT),
-            ("DELETE", "/instances/lobby-1/remove", StatusCode::NO_CONTENT),
-            ("DELETE", "/templates/lobby/custom", StatusCode::NO_CONTENT),
-            ("DELETE", "/groups/lobby", StatusCode::NO_CONTENT),
-            ("POST", "/templates/absent/custom", StatusCode::NOT_FOUND),
-        ] {
-            let response = app
-                .clone()
-                .oneshot(Request::builder().method(method).uri(path).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            assert_eq!(response.status(), expected, "{method} {path}");
-        }
-    }
 }

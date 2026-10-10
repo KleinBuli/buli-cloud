@@ -1,7 +1,11 @@
 use crate::{
     config::config_manager::ConfigManager,
     groups::{group::Group, group_manager::GroupManager},
-    instances::{instance::Instance, instance_manager::InstanceManager, static_instance_manager::StaticInstanceManager},
+    instances::{
+        instance::{Instance, InstanceMode},
+        instance_manager::InstanceManager,
+        static_config::StaticInstanceConfig,
+    },
     templates::template_manager::{GROUP_CONFIG, TemplateManager},
     util::{
         file_utils::{StagedDirectory, copy_dir_all, validate_name},
@@ -9,12 +13,14 @@ use crate::{
     },
 };
 use std::{
-    fs,
     io::{Error, ErrorKind},
     path::PathBuf,
     sync::Arc,
 };
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::{
+    fs,
+    sync::{Mutex, MutexGuard},
+};
 
 #[derive(Default)]
 struct Lifecycle {
@@ -28,7 +34,6 @@ pub struct CloudCore {
     group_manager: Arc<GroupManager>,
     template_manager: Arc<TemplateManager>,
     instance_manager: Arc<InstanceManager>,
-    static_instance_manager: Arc<StaticInstanceManager>,
     config_manager: ConfigManager,
     server_software_manager: ServerSoftwareManager,
     operations: Mutex<Lifecycle>,
@@ -41,8 +46,7 @@ impl CloudCore {
         Ok(Self {
             group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
             template_manager: Arc::new(TemplateManager::new(root_path.join("templates"))),
-            instance_manager: Arc::new(InstanceManager::new(root_path.join("running"))),
-            static_instance_manager: Arc::new(StaticInstanceManager::new(root_path.join("static"))),
+            instance_manager: Arc::new(InstanceManager::new(root_path.join("running"), root_path.join("static"))),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
             root_path,
@@ -63,10 +67,7 @@ impl CloudCore {
             return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
         }
         if !guard.initialized {
-            return Err(Error::new(
-                ErrorKind::ResourceBusy,
-                "Initialize the cloud before changing its state",
-            ));
+            return Err(Error::new(ErrorKind::ResourceBusy, "Initialize the cloud before changing its state"));
         }
         Ok(guard)
     }
@@ -76,10 +77,6 @@ impl CloudCore {
     }
     pub fn template_manager(&self) -> &TemplateManager {
         &self.template_manager
-    }
-
-    pub fn static_instance_manager(&self) -> &StaticInstanceManager {
-        &self.static_instance_manager
     }
 
     pub fn instance_manager(&self) -> &InstanceManager {
@@ -133,23 +130,13 @@ impl CloudCore {
     pub async fn create_group(&self, name: &str) -> Result<(), Error> {
         let _operation = self.operation().await?;
         validate_name(name)?;
-        if self
-            .group_manager
-            .groups()
-            .await
-            .iter()
-            .any(|group| group.name().eq_ignore_ascii_case(name))
-        {
+        if self.group_manager.groups().await.iter().any(|group| group.name().eq_ignore_ascii_case(name)) {
             return Err(Error::new(ErrorKind::AlreadyExists, "Group already exists"));
         }
         let global_existed = self.template_manager.exists_on_disk(name, "global");
         self.ensure_global(name).await?;
         self.template_manager
-            .load_group_templates(
-                name,
-                &["global".to_string()],
-                self.config_manager.config().fallback_minecraft_version(),
-            )
+            .load_group_templates(name, &["global".to_string()], self.config_manager.config().fallback_minecraft_version())
             .await?;
         let group = Group::new(name.to_string(), vec!["global".to_string()], self.templates_path().join(name));
         if let Err(error) = self.group_manager.add_group(group).await {
@@ -173,15 +160,12 @@ impl CloudCore {
                 .iter()
                 .any(|instance| instance.instance().group_name() == name)
         {
-            return Err(Error::new(
-                ErrorKind::ResourceBusy,
-                "Remove the group's instances and custom templates first",
-            ));
+            return Err(Error::new(ErrorKind::ResourceBusy, "Remove the group's instances and custom templates first"));
         }
         let path = self.templates_path().join(name);
         if path.exists() {
-            for entry in fs::read_dir(&path)? {
-                let entry = entry?;
+            let mut entries = fs::read_dir(&path).await?;
+            while let Some(entry) = entries.next_entry().await? {
                 let file_name = entry.file_name();
 
                 if file_name != "global" && file_name != GROUP_CONFIG {
@@ -243,7 +227,7 @@ impl CloudCore {
             .instances_list()
             .await
             .iter()
-            .any(|instance| instance.instance().group_name() == group && instance.instance().template_name() == Some(name))
+            .any(|instance| instance.instance().group_name() == group && instance.instance().template_name() == name)
         {
             return Err(Error::new(ErrorKind::ResourceBusy, "Template is used by an instance"));
         }
@@ -254,10 +238,16 @@ impl CloudCore {
             None
         };
         self.group_manager.delete_template(group, name).await?;
+        if let Err(error) = self.template_manager.forget_template(group, name).await {
+            self.group_manager
+                .add_template(group, name)
+                .await
+                .map_err(|rollback| Error::other(format!("Could not remove template metadata: {error}; restoring group failed: {rollback}")))?;
+            return Err(error);
+        }
         if let Some(staged) = staged {
             staged.commit();
         }
-        self.template_manager.forget_template(group, name).await?;
         Ok(())
     }
 
@@ -300,31 +290,41 @@ impl CloudCore {
             }
         };
 
-        let instance = self.instance_manager.create_instance_from_template(group, template).await?;
+        let instance = self.instance_manager.create_instance_from_template(group, &template).await?;
+        let base_path = match instance.instance_mode() {
+            InstanceMode::Dynamic => self.running_path(),
+            InstanceMode::Static => self.static_servers_path(),
+        };
 
-        let prepare = (|| -> Result<(), Error> {
-            fs::create_dir_all(self.running_path())?;
+        let prepare = (async || -> Result<(), Error> {
+            fs::create_dir_all(&base_path).await?;
 
-            let staged = tempfile::Builder::new().prefix(".preparing-").tempdir_in(self.running_path())?;
+            let staged = tempfile::Builder::new().prefix(".preparing-").tempdir_in(&base_path)?;
 
             copy_dir_all(&source, staged.path())?;
 
             if let Some(jar_path) = cached_jar {
-                fs::copy(jar_path, staged.path().join(&jar_name))?;
+                fs::copy(jar_path, staged.path().join(&jar_name)).await?;
             }
 
             let metadata = staged.path().join("templates.toml");
 
             if metadata.exists() {
-                fs::remove_file(metadata)?;
+                fs::remove_file(metadata).await?;
             }
 
-            fs::rename(staged.path(), self.running_path().join(instance.id()))?;
+            if template.is_static_instance() {
+                let config = StaticInstanceConfig::new(group.to_string(), template.name().to_string());
+
+                config.save(&staged.path().join("instance.toml")).await?;
+            }
+
+            fs::rename(staged.path(), &base_path.join(instance.id())).await?;
 
             Ok(())
         })();
 
-        if let Err(error) = prepare {
+        if let Err(error) = prepare.await {
             self.instance_manager.remove_instance(instance.id()).await?;
 
             return Err(error);
@@ -354,18 +354,7 @@ impl CloudCore {
     pub async fn remove_instance(&self, id: &str) -> Result<(), Error> {
         let _operation = self.operation().await?;
         validate_name(id)?;
-        self.instance_manager.stop_instance(id).await?;
-        let path = self.running_path().join(id);
-        let staged = if path.exists() {
-            Some(StagedDirectory::new(&self.running_path(), &path)?)
-        } else {
-            None
-        };
-        self.instance_manager.remove_instance(id).await?;
-        if let Some(staged) = staged {
-            staged.commit();
-        }
-        Ok(())
+        self.instance_manager.remove_instance_with_files(id).await
     }
 
     pub async fn validate_groups(&self) -> Result<(), Error> {
@@ -384,7 +373,7 @@ impl CloudCore {
 
     pub async fn cleanup_running_directory(&self) -> Result<(), Error> {
         if !self.running_path().exists() {
-            tokio::fs::create_dir_all(&self.running_path()).await?;
+            fs::create_dir_all(&self.running_path()).await?;
             return Ok(());
         }
 
@@ -399,6 +388,26 @@ impl CloudCore {
             } else {
                 tokio::fs::remove_file(&path).await?;
             }
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn restore_static_instances(&self) -> Result<(), Error> {
+        let instances = self.instance_manager().discover_static_instances().await?;
+
+        for id in &instances {
+            let config = StaticInstanceConfig::load(&&self.static_servers_path().join(id).join("instance.toml")).await?;
+            let group = config.group();
+            let template_name = config.template();
+            let template = self
+                .template_manager()
+                .get_template(group, template_name)
+                .await
+                .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Didn't find template {template_name} for group {group}")))?;
+
+            let instance = Instance::new(id, group, template_name.to_string(), InstanceMode::Static);
+            self.instance_manager().register_instance(instance, template).await?
         }
 
         Ok(())
@@ -421,14 +430,13 @@ impl CloudCore {
             self.running_path(),
             self.cache_path(),
         ] {
-            fs::create_dir_all(path)?;
+            fs::create_dir_all(path).await?;
         }
 
-        fs::create_dir_all(self.cache_path().join("versions"))?;
-        fs::create_dir(self.static_servers_path().join("proxy"))?;
-        fs::create_dir(self.static_servers_path().join("server"))?;
+        fs::create_dir_all(self.cache_path().join("versions")).await?;
 
-        let version = self.config_manager.config().fallback_minecraft_version();
+        let config = self.config_manager.config();
+        let version = config.fallback_minecraft_version();
         self.server_software_manager.ensure_paper_available(version).await?;
         self.server_software_manager.ensure_mojang_mapping(version).await?;
         self.server_software_manager.ensure_velocity_available().await?;
@@ -450,7 +458,28 @@ impl CloudCore {
                 .await?;
         }
         self.validate_groups().await?;
+        self.restore_static_instances().await?;
+
         operation.initialized = true;
+        Ok(())
+    }
+
+    pub async fn reload(&self) -> Result<(), Error> {
+        let _operation = self.operation().await?;
+
+        let config = self.config_manager.read_config().await?;
+        let groups = self.group_manager.read_groups_from_config()?;
+        let templates = self.template_manager.prepare_reload(&groups, config.fallback_minecraft_version())?;
+        for instance in self.instance_manager.instances_list().await {
+            let instance = instance.instance();
+            if !templates.contains_key(&(instance.group_name().to_string(), instance.template_name().to_string())) {
+                return Err(Error::new(ErrorKind::ResourceBusy, "Reload would orphan an existing instance"));
+            }
+        }
+        self.group_manager.replace_groups(groups).await;
+        self.template_manager.replace_templates(templates).await;
+        self.config_manager.replace_config(config);
+
         Ok(())
     }
 

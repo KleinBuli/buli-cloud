@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
+#[command(name = "bulicloud", disable_help_subcommand = true, disable_help_flag = true)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -18,13 +19,16 @@ pub enum Commands {
     Copy {
         instance: String,
     },
-
     Console {
         instance: String,
     },
 
+    Instances,
+    Reload,
     Shutdown,
     Health,
+    Help,
+
     Template {
         #[command(subcommand)]
         command: TemplateCommands,
@@ -48,10 +52,12 @@ pub enum TemplateCommands {
         #[arg(long, conflicts_with = "proxy")]
         server: bool,
     },
+
+    List,
 }
 
-// group create <name>
 #[derive(Subcommand)]
 pub enum GroupCommands {
     Create { name: String },
+    List,
 }

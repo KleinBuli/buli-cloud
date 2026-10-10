@@ -7,6 +7,20 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::{Error, Message};
 
+pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwest::Error> {
+    let response = http_client.get(format!("{}instances/", url)).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+
+    if status.is_success() {
+        log(Info, &body.to_string())
+    } else {
+        log(LogLevel::Error, &format!("Error while requesting instances: {} - {}", body, status))
+    }
+
+    Ok(true)
+}
+
 pub(super) async fn console(url: &str, instance_id: &str) -> Result<bool, Box<dyn std::error::Error>> {
     let ws_url = format!("{}instances/{}/console", url.replace("http://", "ws://"), instance_id);
     let (socket, response) = connect_async(ws_url).await.map_err(std::io::Error::other)?;
@@ -73,10 +87,7 @@ async fn handle_input(
 }
 
 pub(super) async fn start(http_client: &Client, url: &str, group: String, template: String) -> Result<bool, reqwest::Error> {
-    let response = http_client
-        .post(format!("{}instances/new/{}/{}", url, group, template))
-        .send()
-        .await?;
+    let response = http_client.post(format!("{}instances/new/{}/{}", url, group, template)).send().await?;
 
     let status = response.status();
 
@@ -98,10 +109,7 @@ pub(super) async fn start(http_client: &Client, url: &str, group: String, templa
         log(Info, &format!("Started Instance: {}", id));
     } else {
         let body = response.text().await?;
-        log(
-            LogLevel::Error,
-            &format!("Error while starting instance {}: {} - {}", id, status, body),
-        );
+        log(LogLevel::Error, &format!("Error while starting instance {}: {} - {}", id, status, body));
     }
 
     Ok(true)

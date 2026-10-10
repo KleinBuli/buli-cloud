@@ -84,10 +84,7 @@ impl TemplateManager {
         for (name, template) in &config.templates {
             self.checked_path(group, name)?;
             if !names.insert(name.to_ascii_lowercase()) {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Template names must be unique regardless of case",
-                ));
+                return Err(Error::new(ErrorKind::InvalidData, "Template names must be unique regardless of case"));
             }
             Self::validate_metadata(name, template)?;
         }
@@ -106,10 +103,7 @@ impl TemplateManager {
 
     fn validate_metadata(name: &str, template: &Template) -> Result<(), Error> {
         if template.name() != name {
-            return Err(Error::new(
-                ErrorKind::InvalidData,
-                "Template metadata name does not match configuration key",
-            ));
+            return Err(Error::new(ErrorKind::InvalidData, "Template metadata name does not match configuration key"));
         }
 
         validate_name(&template.jar_name()?)?;
@@ -120,10 +114,7 @@ impl TemplateManager {
         Self::validate_metadata(name, template)?;
         let path = self.checked_path(group, name)?;
         if !path.is_dir() {
-            return Err(Error::new(
-                ErrorKind::NotFound,
-                format!("Template directory missing: {}", path.display()),
-            ));
+            return Err(Error::new(ErrorKind::NotFound, format!("Template directory missing: {}", path.display())));
         }
         Ok(())
     }
@@ -137,20 +128,14 @@ impl TemplateManager {
 
         for name in names {
             if !seen.insert(name.to_ascii_lowercase()) {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    "Template names must be unique regardless of case",
-                ));
+                return Err(Error::new(ErrorKind::InvalidData, "Template names must be unique regardless of case"));
             }
             let _path = self.checked_path(group, name)?;
             let template = if let Some(template) = config.templates.get(name) {
                 template.clone()
             } else {
                 if config.templates.keys().any(|existing| existing.eq_ignore_ascii_case(name)) {
-                    return Err(Error::new(
-                        ErrorKind::InvalidData,
-                        "Template name case differs from group configuration",
-                    ));
+                    return Err(Error::new(ErrorKind::InvalidData, "Template name case differs from group configuration"));
                 }
 
                 let template = if name == "global" {
@@ -175,6 +160,43 @@ impl TemplateManager {
         templates.retain(|(g, _), _| g != group);
         templates.extend(loaded);
         Ok(())
+    }
+
+    pub(crate) fn prepare_reload(
+        &self,
+        groups: &HashMap<String, crate::groups::group::Group>,
+        global_version: &str,
+    ) -> Result<HashMap<(String, String), Template>, Error> {
+        let mut loaded = HashMap::new();
+        for group in groups.values() {
+            if group.path() != &self.templates_path.join(group.name()) {
+                return Err(Error::new(ErrorKind::InvalidData, "Group path does not match template directory"));
+            }
+            if !group.template_names().iter().any(|name| name == "global") {
+                return Err(Error::new(ErrorKind::InvalidData, "The global template is required"));
+            }
+            let config = self.read_group_config(group.name())?;
+            let mut seen = std::collections::HashSet::new();
+            for name in group.template_names() {
+                if !seen.insert(name.to_ascii_lowercase()) {
+                    return Err(Error::new(ErrorKind::InvalidData, "Duplicate template name"));
+                }
+                let template = match config.templates.get(name) {
+                    Some(template) => template.clone(),
+                    None if name == "global" && !config.templates.keys().any(|key| key.eq_ignore_ascii_case(name)) => {
+                        Template::new(name, ServerSoftware::Paper, Some(global_version.to_string()), None)
+                    }
+                    None => return Err(Error::new(ErrorKind::InvalidData, format!("Missing metadata for {name}"))),
+                };
+                self.validate_template(group.name(), name, &template)?;
+                loaded.insert((group.name().to_string(), name.clone()), template);
+            }
+        }
+        Ok(loaded)
+    }
+
+    pub(crate) async fn replace_templates(&self, templates: HashMap<(String, String), Template>) {
+        *self.templates.write().await = templates;
     }
 
     pub(crate) async fn create_new_template(

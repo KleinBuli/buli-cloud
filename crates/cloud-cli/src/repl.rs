@@ -34,7 +34,15 @@ pub(crate) async fn run_cli_loop(http_client: &Client, url: &str) -> Result<(), 
                 }
             },
             Err(error) => {
-                log(LogLevel::Error, &format!("{error}"));
+                match error.kind() {
+                    clap::error::ErrorKind::InvalidSubcommand | clap::error::ErrorKind::UnknownArgument => {
+                        log(LogLevel::Error, "Invalid command. Run \x1b[36mhelp\x1b[0m for available commands.");
+                    }
+
+                    _ => {
+                        error.print().ok();
+                    }
+                }
                 continue;
             }
         }

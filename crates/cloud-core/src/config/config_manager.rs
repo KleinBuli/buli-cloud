@@ -2,6 +2,7 @@ use std::{
     fs::{self},
     io::Error,
     path::PathBuf,
+    sync::RwLock,
 };
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
 
 pub struct ConfigManager {
     config_path: PathBuf,
-    config: Config,
+    config: RwLock<Config>,
 }
 
 impl ConfigManager {
@@ -23,7 +24,7 @@ impl ConfigManager {
             let default_config = Config::default();
             let config_manager = Self {
                 config_path,
-                config: default_config,
+                config: RwLock::new(default_config),
             };
 
             log(Warn, "config.toml not found. Creating default configuration.");
@@ -34,11 +35,17 @@ impl ConfigManager {
         let config_content = tokio::fs::read_to_string(&config_path).await?;
         let config = toml::from_str::<Config>(&config_content).map_err(std::io::Error::other)?;
         log(Info, "Loaded config.toml");
-        Ok(Self { config_path, config })
+        Ok(Self {
+            config_path,
+            config: RwLock::new(config),
+        })
     }
 
     pub async fn from(config_path: PathBuf, config: Config) -> Result<Self, Error> {
-        let config_manager = Self { config_path, config };
+        let config_manager = Self {
+            config_path,
+            config: RwLock::new(config),
+        };
         Ok(config_manager)
     }
 
@@ -46,19 +53,25 @@ impl ConfigManager {
         &self.config_path
     }
 
-    pub fn config(&self) -> &Config {
-        &self.config
+    pub fn config(&self) -> Config {
+        self.config.read().unwrap().clone()
+    }
+
+    pub(crate) fn replace_config(&self, config: Config) {
+        *self.config.write().unwrap() = config;
+    }
+
+    pub(crate) async fn read_config(&self) -> Result<Config, Error> {
+        let content = tokio::fs::read_to_string(&self.config_path).await?;
+        toml::from_str(&content).map_err(Error::other)
     }
 
     pub fn config_exists(&self) -> Result<bool, Error> {
         fs::exists(&self.config_path)
     }
 
-    pub async fn reload_config(&mut self) -> Result<(), Error> {
-        let config_content = tokio::fs::read_to_string(&self.config_path).await?;
-        let config = toml::from_str::<Config>(&config_content).map_err(std::io::Error::other)?;
-
-        self.config = config;
+    pub async fn reload_config(&self) -> Result<(), Error> {
+        self.replace_config(self.read_config().await?);
         log(Info, "Reloaded config.toml");
 
         Ok(())
@@ -69,7 +82,7 @@ impl ConfigManager {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        let config_toml = toml::to_string_pretty(&self.config).map_err(std::io::Error::other)?;
+        let config_toml = toml::to_string_pretty(&self.config()).map_err(std::io::Error::other)?;
         crate::util::file_utils::atomic_write(&self.config_path, config_toml.as_bytes())?;
         log(Info, "config.toml was saved.");
         Ok(())

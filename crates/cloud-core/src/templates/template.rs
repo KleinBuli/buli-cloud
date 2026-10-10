@@ -13,7 +13,7 @@ pub struct Template {
     min_instances: i16,
     max_instances: i16,
     new_instances_player_percentage: i8,
-    auto_copy_on_stop: bool,
+    static_instance: bool,
 }
 
 impl Template {
@@ -55,11 +55,15 @@ impl Template {
             min_instances: 0,
             max_instances: -1,
             new_instances_player_percentage: 100,
-            auto_copy_on_stop: false,
+            static_instance: false,
         }
     }
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn is_static_instance(&self) -> bool {
+        self.static_instance
     }
 
     pub fn server_software(&self) -> &ServerSoftware {
@@ -92,9 +96,5 @@ impl Template {
 
     pub fn new_instances_player_percentage(&self) -> &i8 {
         &self.new_instances_player_percentage
-    }
-
-    pub fn auto_copy_on_stop(&self) -> bool {
-        self.auto_copy_on_stop
     }
 }
