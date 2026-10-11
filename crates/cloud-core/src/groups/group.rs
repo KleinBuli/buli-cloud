@@ -2,19 +2,50 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::{
+    groups::group::GroupRole::{ProxiedServer, Proxy, StandaloneServer},
+    util::software::softwaremanager::ServerSoftware,
+};
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Group {
     name: String,
     template_names: Vec<String>,
+    role: GroupRole,
     maintenance: bool,
     path: PathBuf,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum GroupRole {
+    Proxy,
+    StandaloneServer,
+    ProxiedServer,
+}
+
+impl GroupRole {
+    pub fn to_string(&self) -> String {
+        match self {
+            Proxy => "Proxy".to_string(),
+            StandaloneServer => "StandaloneServer".to_string(),
+            ProxiedServer => "ProxiedServer".to_string(),
+        }
+    }
+
+    pub fn allows_software(&self, software: &ServerSoftware) -> bool {
+        match self {
+            Self::Proxy => software == &ServerSoftware::Velocity,
+            Self::StandaloneServer | Self::ProxiedServer => software == &ServerSoftware::Paper || software == &ServerSoftware::Custom,
+        }
+    }
+}
+
 impl Group {
-    pub fn new(name: String, template_names: Vec<String>, path: PathBuf) -> Self {
+    pub fn new(name: String, template_names: Vec<String>, path: PathBuf, role: GroupRole) -> Self {
         Self {
             name,
             template_names,
+            role,
             path,
             maintenance: false,
         }
@@ -22,6 +53,10 @@ impl Group {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn role(&self) -> GroupRole {
+        self.role
     }
 
     pub fn path(&self) -> &PathBuf {

@@ -86,7 +86,7 @@ async fn handle_input(
     }
 }
 
-pub(super) async fn start(http_client: &Client, url: &str, group: String, template: String) -> Result<bool, reqwest::Error> {
+pub(super) async fn create(http_client: &Client, url: &str, group: String, template: String) -> Result<bool, reqwest::Error> {
     let response = http_client.post(format!("{}instances/new/{}/{}", url, group, template)).send().await?;
 
     let status = response.status();
@@ -101,8 +101,11 @@ pub(super) async fn start(http_client: &Client, url: &str, group: String, templa
 
     log(Info, &format!("Created Instance: {}", id));
 
-    let response = http_client.post(format!("{}instances/{}/start", url, id)).send().await?;
+    Ok(true)
+}
 
+pub(super) async fn start(http_client: &Client, url: &str, id: &str) -> Result<bool, reqwest::Error> {
+    let response = http_client.post(format!("{}instances/{}/start", url, id)).send().await?;
     let status = response.status();
 
     if status.is_success() {
@@ -110,6 +113,20 @@ pub(super) async fn start(http_client: &Client, url: &str, group: String, templa
     } else {
         let body = response.text().await?;
         log(LogLevel::Error, &format!("Error while starting instance {}: {} - {}", id, status, body));
+    }
+
+    Ok(true)
+}
+
+pub(super) async fn stop(http_client: &Client, url: &str, id: &str) -> Result<bool, reqwest::Error> {
+    let response = http_client.post(format!("{}instances/{}/stop", url, id)).send().await?;
+    let status = response.status();
+
+    if status.is_success() {
+        log(Info, &format!("Stopped Instance: {}", id));
+    } else {
+        let body = response.text().await?;
+        log(LogLevel::Error, &format!("Error while stopping instance {}: {} - {}", id, status, body));
     }
 
     Ok(true)

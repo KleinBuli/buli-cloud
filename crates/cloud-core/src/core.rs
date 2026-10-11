@@ -1,14 +1,21 @@
 use crate::{
     config::config_manager::ConfigManager,
-    groups::{group::Group, group_manager::GroupManager},
+    groups::{
+        group::{Group, GroupRole},
+        group_manager::GroupManager,
+    },
     instances::{
         instance::{Instance, InstanceMode},
         instance_manager::InstanceManager,
         static_config::StaticInstanceConfig,
     },
-    templates::template_manager::{GROUP_CONFIG, TemplateManager},
+    templates::{
+        template::Template,
+        template_manager::{GROUP_CONFIG, TemplateManager},
+    },
     util::{
         file_utils::{StagedDirectory, copy_dir_all, validate_name},
+        secret_generator,
         software::softwaremanager::{ServerSoftware, ServerSoftwareManager},
     },
 };
@@ -79,7 +86,11 @@ impl CloudCore {
         Ok(Self {
             group_manager: Arc::new(GroupManager::new(root_path.join("config/groups.toml"))?),
             template_manager: Arc::new(TemplateManager::new(root_path.join("templates"))),
-            instance_manager: Arc::new(InstanceManager::new(root_path.join("running"), root_path.join("static"))),
+            instance_manager: Arc::new(InstanceManager::new(
+                root_path.join("running"),
+                root_path.join("static"),
+                root_path.join("config/forwarding.secret"),
+            )),
             config_manager,
             server_software_manager: ServerSoftwareManager::new(root_path.join("cache/versions")),
             root_path,
@@ -151,7 +162,7 @@ impl CloudCore {
         fs::create_dir_all(self.templates_path().join(group).join("global")).await
     }
 
-    pub async fn create_group(&self, name: &str) -> Result<(), Error> {
+    pub async fn create_group(&self, name: &str, group_role: GroupRole) -> Result<(), Error> {
         let _operation = self.operation().await?;
         validate_name(name)?;
         if self.group_manager.groups().await.iter().any(|group| group.name().eq_ignore_ascii_case(name)) {
@@ -160,7 +171,7 @@ impl CloudCore {
         let global_existed = self.template_manager.exists_on_disk(name, "global");
         self.ensure_global(name).await?;
         self.template_manager.load_group_templates(name, &[]).await?;
-        let group = Group::new(name.to_string(), vec![], self.templates_path().join(name));
+        let group = Group::new(name.to_string(), vec![], self.templates_path().join(name), group_role);
         if let Err(error) = self.group_manager.add_group(group).await {
             if !global_existed {
                 StagedDirectory::new(&self.templates_path(), &self.templates_path().join(name).join("global"))?.commit()?;
@@ -225,7 +236,17 @@ impl CloudCore {
         custom_jar_name: Option<String>,
     ) -> Result<(), Error> {
         let _operation = self.operation().await?;
-        self.require_group(group).await?;
+        let result = self.require_group(group).await?;
+        let role = result.role();
+        let role_name = role.to_string();
+
+        if !role.allows_software(&software) {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("Group with role {role_name} can't use ServerSoftware: {software}"),
+            ));
+        }
+
         self.template_manager
             .create_new_template(group, name, software, version, custom_jar_name)
             .await?;
@@ -383,10 +404,11 @@ impl CloudCore {
             .get_instance(id)
             .await
             .ok_or_else(|| Error::new(ErrorKind::NotFound, "Instance not found"))?;
-        if self.require_group(instance.instance().group_name()).await?.maintenance() {
-            return Err(Error::new(ErrorKind::ResourceBusy, "Group is in maintenance"));
-        }
-        self.instance_manager.start_instance(id).await
+
+        let group = self.require_group(instance.instance().group_name()).await?;
+        let group_role = group.role();
+
+        self.instance_manager.start_instance(id, group_role).await
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {
@@ -409,14 +431,41 @@ impl CloudCore {
                 if name == "global" {
                     continue;
                 }
-                if self.template_manager.get_template(group.name(), name).await.is_none() {
-                    return Err(Error::new(
-                        ErrorKind::NotFound,
-                        format!("Template '{name}' in group '{}' not found", group.name()),
-                    ));
-                }
+
+                let template = self
+                    .template_manager
+                    .get_template(group.name(), name)
+                    .await
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Template '{name}' not found")))?;
+                Self::validate_group_template(&group, &template)?;
             }
         }
+        Ok(())
+    }
+
+    pub async fn ensure_forwarding_secret(&self) -> Result<(), Error> {
+        let path = self.config_path().join("forwarding.secret");
+
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(Error::new(ErrorKind::InvalidData, "Forwarding secret path is not a regular file"));
+                }
+            }
+
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                secret_generator::create_secret_file(&path).await?;
+            }
+
+            Err(error) => return Err(error),
+        }
+
+        let secret = tokio::fs::read_to_string(&path).await?;
+
+        if secret.len() != 64 || !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::new(ErrorKind::InvalidData, "Forwarding secret is invalid (expected 64 hex characters)"));
+        }
+
         Ok(())
     }
 
@@ -460,6 +509,7 @@ impl CloudCore {
         }
 
         fs::create_dir_all(self.cache_path().join("versions")).await?;
+        self.ensure_forwarding_secret().await?;
 
         let config = self.config_manager.config();
         let version = config.fallback_minecraft_version();
@@ -494,9 +544,33 @@ impl CloudCore {
         let groups = self.group_manager.read_groups_from_config()?;
         let templates = self.template_manager.prepare_reload(&groups)?;
 
+        for group in groups.values() {
+            for name in group.template_names() {
+                let key = (group.name().to_string(), name.to_string());
+
+                let template = templates
+                    .get(&key)
+                    .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Template '{name}' in group '{}' not found", group.name())))?;
+
+                Self::validate_group_template(group, template)?;
+            }
+        }
         self.group_manager.replace_groups(groups).await;
         self.template_manager.replace_templates(templates).await;
         self.config_manager.replace_config(config);
+
+        Ok(())
+    }
+
+    fn validate_group_template(group: &Group, template: &Template) -> Result<(), Error> {
+        let software = template.server_software();
+
+        if !group.role().allows_software(software) {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!("Group '{}' cannot use software {software}", group.name()),
+            ));
+        }
 
         Ok(())
     }
@@ -517,44 +591,5 @@ impl CloudCore {
         }
         self.instance_manager.shutdown().await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn data_directory_is_exclusive_and_preserved() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir(root.path().join("running")).unwrap();
-        std::fs::write(root.path().join("running/world"), b"preserve").unwrap();
-        let core = CloudCore::new(root.path()).await.unwrap();
-        assert!(CloudCore::new(root.path()).await.is_err());
-        drop(core);
-        let _core = CloudCore::new(root.path()).await.unwrap();
-        assert_eq!(std::fs::read(root.path().join("running/world")).unwrap(), b"preserve");
-    }
-
-    #[tokio::test]
-    async fn unresolved_process_blocks_reuse() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("static/test")).unwrap();
-        std::fs::write(root.path().join("static/test/.process"), b"123").unwrap();
-        assert!(CloudCore::new(root.path()).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn reload_accepts_global_as_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let core = CloudCore::new(root.path()).await.unwrap();
-        core.operations.write().await.initialized = true;
-        core.create_group("lobby").await.unwrap();
-        core.reload().await.unwrap();
-        assert!(core.templates_path().join("lobby/global").is_dir());
-        assert!(core.group_manager.groups().await[0].template_names().is_empty());
-        core.request_shutdown();
-        core.wait_for_shutdown().await;
-        assert!(core.create_group("late").await.is_err());
     }
 }

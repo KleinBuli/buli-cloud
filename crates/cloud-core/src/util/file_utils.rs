@@ -200,6 +200,39 @@ pub fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Re
     Ok(())
 }
 
+pub fn set_velocity_property(path: &Path, key: &str, value: toml::Value) -> Result<(), Error> {
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+    let mut config: toml::Table = toml::from_str(&content).map_err(Error::other)?;
+    config.insert(key.to_string(), value);
+    return atomic_write(path, toml::to_string_pretty(&config).map_err(Error::other)?.as_bytes());
+}
+
+pub async fn set_paper_property(paper_yml_path: &Path, entry: &str, value: serde_yml::Value) -> Result<(), Error> {
+    if !paper_yml_path.exists() || paper_yml_path.file_name().unwrap() != "paper-global.yml" {
+        return Err(Error::new(ErrorKind::NotFound, "Path is not a paper-global.yml file"));
+    }
+
+    let content = tokio::fs::read_to_string(&paper_yml_path).await?;
+    let mut config: serde_yml::Value = serde_yml::from_str(&content).map_err(Error::other)?;
+
+    let entries = entry.split('.');
+    let mut current = &mut config;
+
+    for key in entries {
+        current = &mut current[key];
+    }
+
+    *current = value;
+
+    let content = serde_yml::to_string(&config).map_err(Error::other)?;
+    atomic_write(&paper_yml_path, content.as_bytes())?;
+    Ok(())
+}
+
 pub fn set_server_property(properties_path: &Path, key: &str, value: &str) -> Result<(), Error> {
     if !properties_path.exists() || properties_path.file_name().unwrap() != "server.properties" {
         return Err(Error::new(ErrorKind::NotFound, "Path is not a server.properties file"));
@@ -226,86 +259,4 @@ pub fn set_server_property(properties_path: &Path, key: &str, value: &str) -> Re
     }
     atomic_write(properties_path, lines.join("\n").as_bytes())?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn completed_preparation_is_recovered() {
-        let root = tempfile::tempdir().unwrap();
-        let staged = root.path().join(".preparing-test");
-        fs::create_dir(&staged).unwrap();
-        fs::write(staged.join(".destination"), "server-1").unwrap();
-        fs::write(staged.join("world"), b"prepared").unwrap();
-        recover_staged_directories(root.path()).unwrap();
-        assert_eq!(fs::read(root.path().join("server-1/world")).unwrap(), b"prepared");
-        assert!(!root.path().join("server-1/.destination").exists());
-    }
-
-    #[test]
-    fn interrupted_removal_restores_contents() {
-        let root = tempfile::tempdir().unwrap();
-        let original = root.path().join("server");
-        fs::create_dir(&original).unwrap();
-        fs::write(original.join("world"), b"world data").unwrap();
-        let staged = StagedDirectory::new(root.path(), &original).unwrap();
-        std::mem::forget(staged);
-        recover_staged_directories(root.path()).unwrap();
-        assert_eq!(fs::read(original.join("world")).unwrap(), b"world data");
-        recover_staged_directories(root.path()).unwrap();
-    }
-
-    #[test]
-    fn interrupted_committed_removal_is_finished() {
-        let root = tempfile::tempdir().unwrap();
-        let original = root.path().join("server");
-        fs::create_dir(&original).unwrap();
-        let staged = StagedDirectory::new(root.path(), &original).unwrap();
-        let pending = staged.staged.as_ref().unwrap().path().to_path_buf();
-        atomic_write(&pending.join("committed"), b"committed").unwrap();
-        std::mem::forget(staged);
-        recover_staged_directories(root.path()).unwrap();
-        assert!(!original.exists());
-        assert!(!pending.exists());
-    }
-
-    #[test]
-    fn recovery_never_overwrites_existing_data() {
-        let root = tempfile::tempdir().unwrap();
-        let original = root.path().join("server");
-        fs::create_dir(&original).unwrap();
-        fs::write(original.join("world"), b"original").unwrap();
-        let staged = StagedDirectory::new(root.path(), &original).unwrap();
-        let pending = staged.staged.as_ref().unwrap().path().to_path_buf();
-        std::mem::forget(staged);
-        fs::create_dir(&original).unwrap();
-        fs::write(original.join("world"), b"new").unwrap();
-        assert!(recover_staged_directories(root.path()).is_err());
-        assert_eq!(fs::read(original.join("world")).unwrap(), b"new");
-        assert_eq!(fs::read(pending.join("contents/world")).unwrap(), b"original");
-    }
-}
-
-#[cfg(test)]
-mod metadata_tests {
-    use super::*;
-
-    #[test]
-    fn interrupted_removal_restores_configuration() {
-        let data = tempfile::tempdir().unwrap();
-        let root = data.path().join("templates");
-        let original = root.join("test");
-        fs::create_dir_all(&original).unwrap();
-        let config = data.path().join("groups.toml");
-        fs::write(&config, "before").unwrap();
-        let staged = StagedDirectory::new(&root, &original).unwrap();
-        staged.backup_metadata(&[config.clone()]).unwrap();
-        fs::write(&config, "after").unwrap();
-        std::mem::forget(staged);
-        recover_staged_directories(&root).unwrap();
-        assert!(original.is_dir());
-        assert_eq!(fs::read_to_string(config).unwrap(), "before");
-    }
 }

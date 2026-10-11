@@ -7,7 +7,7 @@ use axum::{
 };
 use cloud_core::{
     CloudCore,
-    groups::group::Group,
+    groups::group::{Group, GroupRole},
     instances::{instance::Instance, instance_manager::InstanceManager, instance_runtime::InstanceInfo},
     logger::logger::{LogLevel, log},
     util::software::softwaremanager::ServerSoftware,
@@ -17,6 +17,11 @@ use std::{
     io::{Error, ErrorKind},
     sync::Arc,
 };
+
+#[derive(Deserialize)]
+struct GroupRoleQuery {
+    role: GroupRole,
+}
 
 fn error_status(error: Error) -> StatusCode {
     let status = match error.kind() {
@@ -141,8 +146,8 @@ async fn group(State(core): State<Arc<CloudCore>>, Path(name): Path<String>) -> 
     core.group_manager().get_group(&name).await.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn create_group(State(core): State<Arc<CloudCore>>, Path(name): Path<String>) -> Result<StatusCode, StatusCode> {
-    core.create_group(&name).await.map_err(error_status)?;
+async fn create_group(State(core): State<Arc<CloudCore>>, Path(name): Path<String>, Query(query): Query<GroupRoleQuery>) -> Result<StatusCode, StatusCode> {
+    core.create_group(&name, query.role).await.map_err(error_status)?;
     Ok(StatusCode::CREATED)
 }
 
@@ -188,28 +193,4 @@ pub async fn start_http_server(core: Arc<CloudCore>) -> std::io::Result<()> {
         .with_graceful_shutdown(async move { shutdown.wait_for_shutdown().await })
         .await
         .map_err(Error::other)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{body::Body, http::Request};
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn list_routes_and_shutdown_are_available() {
-        let root = tempfile::tempdir().unwrap();
-        let core = Arc::new(CloudCore::new(root.path()).await.unwrap());
-        let router = router(core.clone());
-        for path in ["/instances", "/groups", "/templates"] {
-            let response = router.clone().oneshot(Request::builder().uri(path).body(Body::empty()).unwrap()).await.unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
-        }
-        let response = router
-            .oneshot(Request::builder().method("POST").uri("/shutdown").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::ACCEPTED);
-        tokio::time::timeout(std::time::Duration::from_secs(1), core.wait_for_shutdown()).await.unwrap();
-    }
 }

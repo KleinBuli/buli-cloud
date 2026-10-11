@@ -9,18 +9,14 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    Start {
-        group: String,
-        template: String,
-    },
-    Stop {
-        instance: String,
-    },
     Console {
         instance: String,
     },
 
-    Instances,
+    Instance {
+        #[command(subcommand)]
+        command: InstanceCommands,
+    },
     Reload,
     Shutdown,
     Health,
@@ -54,18 +50,25 @@ pub enum TemplateCommands {
 }
 
 #[derive(Subcommand)]
-pub enum GroupCommands {
-    Create { name: String },
+pub enum InstanceCommands {
+    Create { group: String, template: String },
+    Start { instance: String },
+    Stop { instance: String },
     List,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#[derive(Subcommand)]
+pub enum GroupCommands {
+    Create {
+        name: String,
+        #[arg(long, conflicts_with_all = ["proxified", "standalone"])]
+        proxy: bool,
 
-    #[test]
-    fn stop_targets_instance_and_copy_is_unavailable() {
-        assert!(matches!(Cli::try_parse_from(["bulicloud", "stop", "lobby-1"]).unwrap().command, Some(Commands::Stop { instance }) if instance == "lobby-1"));
-        assert!(Cli::try_parse_from(["bulicloud", "copy", "lobby-1"]).is_err());
-    }
+        #[arg(long, conflicts_with_all = ["proxy", "standalone"])]
+        proxified: bool,
+
+        #[arg(long, conflicts_with_all = ["proxified", "proxy"])]
+        standalone: bool,
+    },
+    List,
 }

@@ -12,10 +12,11 @@ pub fn print_help() {
     println!();
 
     println!("{CYAN}{BOLD}  INSTANCE MANAGEMENT{RESET}");
-    print_command("start <group> <template>", "Create and start instance");
-    print_command("stop <instance>", "Stop an instance");
+    print_command("instance create <group> <template>", "Create a new instance");
+    print_command("instance start <instance>", "Start an existing instance");
+    print_command("instance stop <instance>", "Stop an instance");
+    print_command("instance list", "List all instances");
     print_command("console <instance>", "Attach to live console");
-    print_command("instances", "List all running instances");
 
     println!();
     println!("{CYAN}{BOLD}  CONFIGURATION{RESET}");

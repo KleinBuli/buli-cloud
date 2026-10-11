@@ -389,7 +389,9 @@ impl InstanceRuntime {
                         break;
                     }
                     result = child.wait() => {
-                        result?;
+                        let exit_status = result?;
+
+                        log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
                         *status.write().unwrap() = InstanceStatus::Failed;
                         return Ok(());
                     }

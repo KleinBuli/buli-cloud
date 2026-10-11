@@ -86,7 +86,7 @@ impl Template {
             min_instances: 0,
             max_instances: -1,
             new_instances_player_percentage: 100,
-            static_instance: false,
+            static_instance: matches!(server_software, ServerSoftware::Velocity),
             role: None,
             port: None,
             host: default_host(),
