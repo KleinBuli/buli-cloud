@@ -180,7 +180,6 @@ impl InstanceRuntime {
         let max_memory_mb = self.template().max_memory_mb();
 
         command
-            .arg("-Dcom.mojang.eula.agree=true")
             .arg(format!("-Xms{min_memory_mb}m"))
             .arg(format!("-Xmx{max_memory_mb}m"))
             .arg("-jar")
@@ -188,8 +187,11 @@ impl InstanceRuntime {
             .current_dir(path);
 
         if self.template.server_software() != &ServerSoftware::Velocity {
+            command.arg("-Dcom.mojang.eula.agree=true");
             command.arg("--nogui");
         }
+
+        println!("{command:?}");
 
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -389,7 +391,9 @@ impl InstanceRuntime {
                         break;
                     }
                     result = child.wait() => {
-                        result?;
+                        let exit_status = result?;
+
+                        log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
                         *status.write().unwrap() = InstanceStatus::Failed;
                         return Ok(());
                     }

@@ -1,22 +1,31 @@
+use tokio::fs::{self};
+
 use super::InstanceManager;
 use crate::{
+    groups::group::GroupRole::{self},
     instances::{
         instance::{Instance, InstanceMode},
         instance_runtime::{InstanceStatus, RuntimeEvent, RuntimeExitOutcome},
     },
     logger::logger::{LogLevel, log},
     util::{
-        file_utils::{atomic_write, set_server_property},
+        file_utils::{atomic_write, set_server_property, set_velocity_property},
+        secret_generator::create_file,
         software::softwaremanager::ServerSoftware,
     },
 };
 use std::{
     fs::File,
-    io::{Error, ErrorKind, Write},
+    io::{
+        Error,
+        ErrorKind::{self},
+        Write,
+    },
+    path::PathBuf,
 };
 
 impl InstanceManager {
-    pub async fn start_instance(&self, id: &str) -> Result<(), Error> {
+    pub async fn start_instance(&self, id: &str, group_role: GroupRole) -> Result<(), Error> {
         let runtime = self.runtime(id).await?;
         let mut runtime = runtime.lock().await;
 
@@ -49,7 +58,21 @@ impl InstanceManager {
             }
         };
 
+        if let Err(error) = self
+            .configure_forwarding(runtime.instance(), runtime.template().server_software(), group_role)
+            .await
+        {
+            runtime.set_status(InstanceStatus::Failed);
+
+            if let Err(cleanup_error) = self.port_allocator().deallocate(port).await {
+                log(LogLevel::Error, &format!("Failed to deallocate port {port}: {cleanup_error}"));
+            }
+
+            return Err(error);
+        }
+
         runtime.set_port(port);
+
         let directory = self.working_directory(runtime.instance());
         if let Err(error) = runtime.start(&directory) {
             runtime.set_status(InstanceStatus::Failed);
@@ -61,6 +84,91 @@ impl InstanceManager {
         }
 
         Ok(())
+    }
+
+    async fn prepare_proxy_secret(&self, instance: &Instance) -> Result<(), Error> {
+        let dest = self.working_directory(instance).join("forwarding.secret");
+        let src = self.secret_path();
+
+        let secret = fs::read(&src).await?;
+
+        if dest.exists() {
+            if !dest.is_file() {
+                return Err(Error::new(ErrorKind::InvalidData, "Proxy forwarding secret path is not a file"));
+            }
+
+            let existing = fs::read(&dest).await?;
+
+            if existing != secret {
+                return Err(Error::new(ErrorKind::InvalidData, "Proxy forwarding secret differs from central secret"));
+            }
+
+            return Ok(());
+        }
+
+        create_file(&dest, &secret).await
+    }
+
+    async fn configure_forwarding(&self, instance: &Instance, software: &ServerSoftware, role: GroupRole) -> Result<(), Error> {
+        match role {
+            GroupRole::Proxy => {
+                self.prepare_proxy_secret(instance).await?;
+
+                let path = self.working_directory(instance).join("velocity.toml");
+                set_velocity_property(&path, "online-mode", toml::Value::Boolean(true))?;
+                set_velocity_property(&path, "forwarding-secret-file", toml::Value::String("forwarding.secret".to_string()))?;
+                set_velocity_property(&path, "player-info-forwarding-mode", toml::Value::String("modern".to_string()))
+            }
+
+            GroupRole::StandaloneServer => {
+                let properties_path = self.working_directory(instance).join("server.properties");
+                set_server_property(&properties_path, "online-mode", "true")
+            }
+
+            GroupRole::ProxiedServer => {
+                if software != &ServerSoftware::Paper {
+                    return Err(Error::new(ErrorKind::Unsupported, "Automatic Velocity forwarding is only supported for Paper"));
+                }
+
+                let directory = self.working_directory(instance);
+                let properties_path = directory.join("server.properties");
+                let paper_yml_path = directory.join("config").join("paper-global.yml");
+                let secret = tokio::fs::read_to_string(self.secret_path()).await?;
+
+                if secret.len() != 64 || !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(Error::new(ErrorKind::InvalidData, "Invalid forwarding secret"));
+                }
+
+                if !paper_yml_path.exists() {
+                    if let Some(parent) = paper_yml_path.parent() {
+                        fs::create_dir_all(parent).await?;
+                    }
+
+                    atomic_write(&paper_yml_path, b"{}\n")?;
+                }
+
+                self.configure_proxied_server(&paper_yml_path, &secret, true)?;
+                set_server_property(&properties_path, "online-mode", "false")?;
+
+                Ok(())
+            }
+        }
+    }
+
+    fn configure_proxied_server(&self, path: &PathBuf, secret: &str, enabled: bool) -> Result<(), Error> {
+        let content = std::fs::read_to_string(path)?;
+        let mut config: serde_yml::Value = serde_yml::from_str(&content).map_err(Error::other)?;
+
+        config["proxies"]["velocity"]["enabled"] = serde_yml::Value::Bool(enabled);
+
+        if enabled {
+            config["proxies"]["velocity"]["online-mode"] = serde_yml::Value::Bool(true);
+
+            config["proxies"]["velocity"]["secret"] = serde_yml::Value::String(secret.to_string());
+        }
+
+        let content = serde_yml::to_string(&config).map_err(Error::other)?;
+        atomic_write(path, content.as_bytes())
     }
 
     async fn set_port(&self, instance: &Instance, software: &ServerSoftware, fixed_port: Option<u16>, host: &str) -> Result<u16, Error> {
@@ -75,16 +183,12 @@ impl InstanceManager {
         let result = (|| -> Result<(), Error> {
             if software == &ServerSoftware::Velocity {
                 let path = self.working_directory(instance).join("velocity.toml");
-                let content = match std::fs::read_to_string(&path) {
-                    Ok(content) => content,
-                    Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
-                    Err(error) => return Err(error),
-                };
-                let mut config: toml::Table = toml::from_str(&content).map_err(Error::other)?;
                 let bind = std::net::SocketAddr::new(host.parse().map_err(Error::other)?, port).to_string();
-                config.insert("bind".to_string(), toml::Value::String(bind));
-                return atomic_write(&path, toml::to_string_pretty(&config).map_err(Error::other)?.as_bytes());
+
+                set_velocity_property(&path, "bind", toml::Value::String(bind))?;
+                return Ok(());
             }
+
             if !properties_path.exists() {
                 let mut file = File::create(&properties_path)?;
                 writeln!(file, "server-port={port}")?;

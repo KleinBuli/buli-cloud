@@ -1,5 +1,5 @@
 use crate::{
-    groups::group::Group,
+    groups::group::{Group, GroupRole},
     util::file_utils::{atomic_write, validate_name},
 };
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ struct GroupConfig {
     maintenance: bool,
     #[serde(default)]
     template_names: Vec<String>,
+    role: GroupRole,
 }
 
 impl GroupManager {
@@ -64,7 +65,7 @@ impl GroupManager {
             for template in &config.template_names {
                 validate_name(template)?;
             }
-            let mut group = Group::new(name.clone(), Vec::new(), config.path);
+            let mut group = Group::new(name.clone(), Vec::new(), config.path, config.role);
             for template in config.template_names {
                 if template.eq_ignore_ascii_case("global") {
                     continue;
@@ -88,6 +89,7 @@ impl GroupManager {
                             path: group.path().clone(),
                             maintenance: group.maintenance(),
                             template_names: group.template_names().to_vec(),
+                            role: group.role(),
                         },
                     )
                 })

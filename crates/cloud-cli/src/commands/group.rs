@@ -1,6 +1,9 @@
-use cloud_core::logger::logger::{
-    LogLevel::{self, Error, Info},
-    log,
+use cloud_core::{
+    groups::group::GroupRole,
+    logger::logger::{
+        LogLevel::{self, Error, Info},
+        log,
+    },
 };
 use reqwest::Client;
 
@@ -18,8 +21,8 @@ pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwes
     return Ok(true);
 }
 
-pub(super) async fn create(http_client: &Client, url: &str, name: String) -> Result<bool, reqwest::Error> {
-    let response = http_client.post(format!("{}groups/{}", url, name)).send().await?;
+pub(super) async fn create(http_client: &Client, url: &str, name: String, role: GroupRole) -> Result<bool, reqwest::Error> {
+    let response = http_client.post(format!("{}groups/{}?role={}", url, name, role.to_string())).send().await?;
     let status = response.status();
     let body = response.text().await?;
 

@@ -9,7 +9,10 @@ axum = { version = "0.8", features = ["ws"]}
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
 reqwest = { version = "0.13", features = ["json"] }
+rand = { version = "0.9", features = ["os_rng"] }
 toml = "1.1.6"
 tempfile = "3.27"
 zip = "8.6.0"
 sha256 = "1.6.0"
+hex = "0.4"
+serde_yml = "0.0.13"

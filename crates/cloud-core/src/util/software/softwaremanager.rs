@@ -15,7 +15,7 @@ use crate::{
     util::file_utils::atomic_write,
 };
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServerSoftware {
     Paper,
     Vanilla,
@@ -89,10 +89,7 @@ impl ServerSoftwareManager {
         let client = reqwest::Client::new();
 
         let builds = client
-            .get(format!(
-                "https://fill.papermc.io/v3/projects/paper/versions/{}/builds",
-                minecraft_version
-            ))
+            .get(format!("https://fill.papermc.io/v3/projects/paper/versions/{}/builds", minecraft_version))
             .header("User-Agent", "BuliCloud/0.1 (https://github.com/KleinBuli/buli-cloud)")
             .send()
             .await
@@ -157,12 +154,7 @@ impl ServerSoftwareManager {
             .await
             .map_err(Error::other)?;
 
-        let mut versions: Vec<String> = project
-            .versions
-            .into_values()
-            .flatten()
-            .filter(|version| !version.contains('-'))
-            .collect();
+        let mut versions: Vec<String> = project.versions.into_values().flatten().filter(|version| !version.contains('-')).collect();
 
         fn version_key(version: &str) -> Result<Vec<u32>, Error> {
             version.split('.').map(|part| part.parse::<u32>().map_err(Error::other)).collect()
@@ -178,9 +170,7 @@ impl ServerSoftwareManager {
         sorted_versions.sort_by(|a, b| b.0.cmp(&a.0));
 
         for (_, version) in sorted_versions {
-            let downloaded = self
-                .handle_paper_project_download("velocity", &version, &client, &file_path)
-                .await?;
+            let downloaded = self.handle_paper_project_download("velocity", &version, &client, &file_path).await?;
 
             if downloaded {
                 log(Info, &format!("Downloaded Velocity {version} successfully."));
@@ -223,9 +213,7 @@ impl ServerSoftwareManager {
         destination: &std::path::Path,
     ) -> Result<bool, Error> {
         let builds = client
-            .get(format!(
-                "https://fill.papermc.io/v3/projects/{server_software}/versions/{version}/builds"
-            ))
+            .get(format!("https://fill.papermc.io/v3/projects/{server_software}/versions/{version}/builds"))
             .send()
             .await
             .map_err(Error::other)?
@@ -239,10 +227,7 @@ impl ServerSoftwareManager {
             return Ok(false);
         };
 
-        let download = build
-            .downloads
-            .get("server:default")
-            .ok_or_else(|| Error::other("No server download found"))?;
+        let download = build.downloads.get("server:default").ok_or_else(|| Error::other("No server download found"))?;
 
         let bytes = client
             .get(&download.url)
