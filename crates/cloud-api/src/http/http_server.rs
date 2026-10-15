@@ -8,8 +8,13 @@ use axum::{
 use cloud_core::{
     CloudCore,
     groups::group::{Group, GroupRole},
-    instances::{instance::Instance, instance_manager::InstanceManager, instance_runtime::InstanceInfo},
+    instances::{
+        instance::{self, Instance},
+        instance_manager::InstanceManager,
+        instance_runtime::InstanceInfo,
+    },
     logger::logger::{LogLevel, log},
+    templates::template::Template,
     util::software::softwaremanager::ServerSoftware,
 };
 use serde::Deserialize;
@@ -107,6 +112,15 @@ async fn delete_template(State(core): State<Arc<CloudCore>>, Path((group, name))
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn get_template(State(core): State<Arc<CloudCore>>, Path((group, name)): Path<(String, String)>) -> Result<Json<Template>, StatusCode> {
+    let template = core.template_manager().get_template(&group, &name).await;
+
+    match template {
+        Some(template) => Ok(Json(template)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
 async fn create_instance_from_template(
     State(core): State<Arc<CloudCore>>,
     Path((group, name)): Path<(String, String)>,
@@ -122,6 +136,15 @@ async fn delete_instance(State(core): State<Arc<CloudCore>>, Path(id): Path<Stri
 
 async fn instances(State(core): State<Arc<CloudCore>>) -> Json<Vec<InstanceInfo>> {
     Json(core.instance_manager().instances_list().await)
+}
+
+async fn get_instance(State(core): State<Arc<CloudCore>>, Path(id): Path<String>) -> Result<Json<InstanceInfo>, StatusCode> {
+    let instance_info = core.instance_manager().get_instance(&id).await;
+
+    match instance_info {
+        Some(instance_info) => Ok(Json(instance_info)),
+        None => Err(StatusCode::NOT_FOUND),
+    }
 }
 
 async fn start_instance(State(core): State<Arc<CloudCore>>, Path(id): Path<String>) -> Result<StatusCode, StatusCode> {
@@ -176,9 +199,13 @@ pub fn router(core: Arc<CloudCore>) -> Router {
         .route("/groups/{name}", get(group).post(create_group).delete(delete_group))
         .route("/groups/{name}/maintenance", post(enable_group_maintenance).delete(disable_group_maintenance))
         .route("/templates", get(templates))
-        .route("/templates/{group_name}/{template_name}", post(create_template).delete(delete_template))
+        .route(
+            "/templates/{group_name}/{template_name}",
+            get(get_template).post(create_template).delete(delete_template),
+        )
         .route("/instances", get(instances))
         .route("/instances/new/{group_name}/{template_name}", post(create_instance_from_template))
+        .route("/instances/{id}", get(get_instance))
         .route("/instances/{id}/remove", delete(delete_instance))
         .route("/instances/{id}/start", post(start_instance))
         .route("/instances/{id}/stop", post(stop_instance))

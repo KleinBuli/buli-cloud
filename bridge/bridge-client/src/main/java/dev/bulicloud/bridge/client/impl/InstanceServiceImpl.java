@@ -1,10 +1,12 @@
 package dev.bulicloud.bridge.client.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import dev.bulicloud.bridge.api.service.InstanceService;
 import dev.bulicloud.bridge.client.CloudClient;
 import dev.bulicloud.bridge.model.CloudInstance;
 
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 
@@ -16,29 +18,58 @@ public class InstanceServiceImpl implements InstanceService {
         this.cloudClient = Objects.requireNonNull(cloudClient);
     }
 
-
     @Override
     public CompletableFuture<Void> create(String group, String cloudTemplate) {
-        return null;
+        var path = String.format("instances/new/%s/%s", group, cloudTemplate);
+        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 
     @Override
     public CompletableFuture<Void> start(String id) {
-        return null;
+        var path = String.format("instances/%s/start", id);
+        var request = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
+
     }
 
     @Override
     public CompletableFuture<Void> stop(String id) {
-        return null;
+        var path = String.format("instances/%s/stop", id);
+        var request = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 
     @Override
     public CompletableFuture<CloudInstance> get(String id) {
-        return null;
+        return all().thenApply(cloudInstances ->
+                cloudInstances.stream()
+                        .filter(instance -> Objects.equals(instance.id(), id))
+                        .findFirst()
+                        .orElseThrow(() ->
+                                new NoSuchElementException("Instance not found: " + id)));
     }
 
     @Override
     public CompletableFuture<List<CloudInstance>> all() {
-        return null;
+        var path = "instances";
+        var request = cloudClient.post(path, new Object(), new TypeReference<List<CloudInstance>>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 }
