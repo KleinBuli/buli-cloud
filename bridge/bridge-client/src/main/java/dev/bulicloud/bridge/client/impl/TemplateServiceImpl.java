@@ -43,15 +43,8 @@ public class TemplateServiceImpl implements TemplateService {
 
     @Override
     public CompletableFuture<CloudTemplate> get(String group, String template) {
-        return fromGroup(group).thenApply(templates ->
-                templates.stream()
-                        .filter(t -> Objects.equals(t.)))
-    }
-
-    @Override
-    public CompletableFuture<List<CloudTemplate>> fromGroup(String name) {
-        var path = "templates";
-        var request  = cloudClient.get(path, new TypeReference<List<CloudTemplate>>() {});
+        var path = String.format("templates/%s/%s", group, template);
+        var request  = cloudClient.get(path, new TypeReference<CloudTemplate>() {});
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)
@@ -60,7 +53,13 @@ public class TemplateServiceImpl implements TemplateService {
     }
 
     @Override
-    public CompletableFuture<Void> all() {
-        return null;
+    public CompletableFuture<List<CloudTemplate>> all() {
+        var path = "templates";
+        var request  = cloudClient.get(path, new TypeReference<List<CloudTemplate>>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 }

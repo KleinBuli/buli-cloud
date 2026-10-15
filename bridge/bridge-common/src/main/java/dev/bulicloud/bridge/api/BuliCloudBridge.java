@@ -5,6 +5,8 @@ import dev.bulicloud.bridge.api.service.GroupService;
 import dev.bulicloud.bridge.api.service.InstanceService;
 import dev.bulicloud.bridge.api.service.TemplateService;
 
+import java.util.concurrent.CompletableFuture;
+
 public interface BuliCloudBridge {
 
     String getVersion();
@@ -12,5 +14,7 @@ public interface BuliCloudBridge {
     TemplateService templates();
     GroupService groups();
     CloudPlayerService cloudPlayers();
+    CompletableFuture<Void> reload();
+    CompletableFuture<Void> shutdown();
 
 }

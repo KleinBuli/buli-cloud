@@ -13,5 +13,4 @@ public class CloudPlayerServiceImpl implements CloudPlayerService {
         this.cloudClient = Objects.requireNonNull(cloudClient);
     }
 
-
 }

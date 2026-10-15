@@ -1,5 +1,6 @@
 package dev.bulicloud.bridge.client.impl;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import dev.bulicloud.bridge.api.BuliCloudBridge;
 import dev.bulicloud.bridge.api.service.CloudPlayerService;
 import dev.bulicloud.bridge.api.service.GroupService;
@@ -8,6 +9,7 @@ import dev.bulicloud.bridge.api.service.TemplateService;
 import dev.bulicloud.bridge.client.CloudClient;
 
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 
 public class BuliCloudBridgeImpl implements BuliCloudBridge {
 
@@ -44,5 +46,27 @@ public class BuliCloudBridgeImpl implements BuliCloudBridge {
     @Override
     public CloudPlayerService cloudPlayers() {
         return new CloudPlayerServiceImpl(cloudClient);
+    }
+
+    @Override
+    public CompletableFuture<Void> reload() {
+        var path = "reload";
+        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> shutdown() {
+        var path = "shutdown";
+        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 }

@@ -54,12 +54,13 @@ public class InstanceServiceImpl implements InstanceService {
 
     @Override
     public CompletableFuture<CloudInstance> get(String id) {
-        return all().thenApply(cloudInstances ->
-                cloudInstances.stream()
-                        .filter(instance -> Objects.equals(instance.id(), id))
-                        .findFirst()
-                        .orElseThrow(() ->
-                                new NoSuchElementException("Instance not found: " + id)));
+        var path = String.format("instances/%s/", id);
+        var request = cloudClient.get(path, new TypeReference<CloudInstance>() {});
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
     }
 
     @Override

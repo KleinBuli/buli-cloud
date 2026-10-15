@@ -24,6 +24,10 @@ public final class CloudClient {
         if (!httpBaseUrl.startsWith("http://") || !httpBaseUrl.startsWith("https://"))
             throw new IllegalArgumentException("HTTP BaseURL should start with http(s)://");
 
+        if(!httpBaseUrl.endsWith("/")) {
+            throw new IllegalArgumentException("HTTP BaseURL should stop with / (e. g. http://127.0.0.1:8080/)");
+        }
+
         baseUri = URI.create(httpBaseUrl);
         httpClient = HttpClient.newBuilder().build();
         objectMapper = new ObjectMapper();
@@ -72,7 +76,6 @@ public final class CloudClient {
             } catch (JsonProcessingException exception) {
                 throw new CompletionException(exception);
             }
-
         });
     }
 
