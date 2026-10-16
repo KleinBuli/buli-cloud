@@ -4,16 +4,12 @@ import dev.bulicloud.bridge.client.exception.CloudHttpException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.bulicloud.bridge.client.messaging.WebSocketMessageChannel;
-import dev.bulicloud.bridge.messaging.CloudMessage;
-import dev.bulicloud.bridge.messaging.CloudPacket;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -63,7 +59,7 @@ public final class CloudClient {
 
     public CompletableFuture<Void> delete(String path) {
         HttpRequest request = HttpRequest.newBuilder().timeout(Duration.ofSeconds(10)).uri(this.baseUri.resolve(path)).DELETE().build();
-        return send(request, new TypeReference<Void>() {});
+        return send(request, new TypeReference<>() {});
     }
 
     private <T> CompletableFuture<T> send(HttpRequest request, TypeReference<T> responseType) {
