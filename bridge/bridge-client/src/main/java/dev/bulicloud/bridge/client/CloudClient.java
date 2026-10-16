@@ -4,6 +4,8 @@ import dev.bulicloud.bridge.client.exception.CloudHttpException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.bulicloud.bridge.client.messaging.WebSocketMessageChannel;
+import dev.bulicloud.bridge.messaging.MessageChannel;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -19,7 +21,9 @@ public final class CloudClient {
     private final URI baseUri;
     private final ObjectMapper objectMapper;
 
-    public CloudClient(String httpBaseUrl) {
+    private final MessageChannel messageChannel;
+
+    public CloudClient(String httpBaseUrl, String token) {
 
         if (!httpBaseUrl.startsWith("http://") || !httpBaseUrl.startsWith("https://"))
             throw new IllegalArgumentException("HTTP BaseURL should start with http(s)://");
@@ -31,6 +35,7 @@ public final class CloudClient {
         baseUri = URI.create(httpBaseUrl);
         httpClient = HttpClient.newBuilder().build();
         objectMapper = new ObjectMapper();
+        messageChannel = new WebSocketMessageChannel(URI.create("ws://127.0.0.1:8080/bridge"), token);
     }
 
     public <T> CompletableFuture<T> get(String path, TypeReference<T> responseType) {
@@ -78,5 +83,10 @@ public final class CloudClient {
             }
         });
     }
+
+    public MessageChannel messageChannel() {
+        return messageChannel;
+    }
+
 }
 

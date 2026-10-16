@@ -181,6 +181,7 @@ impl InstanceRuntime {
 
         command
             .env("BRIDGE_TOKEN", bridge_secret)
+            .env("INSTANCE_ID", self.instance().id())
             .arg("-Dcom.mojang.eula.agree=true")
             .arg(format!("-Xms{min_memory_mb}m"))
             .arg(format!("-Xmx{max_memory_mb}m"))
