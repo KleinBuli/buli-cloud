@@ -154,7 +154,7 @@ impl InstanceRuntime {
         self.console_tx.subscribe()
     }
 
-    pub(crate) fn start(&mut self, path: &Path) -> Result<(), Error> {
+    pub(crate) fn start(&mut self, path: &Path, bridge_secret: String) -> Result<(), Error> {
         if self.retired {
             return Err(Error::new(ErrorKind::NotFound, "Instance was removed"));
         }
@@ -180,6 +180,7 @@ impl InstanceRuntime {
         let max_memory_mb = self.template().max_memory_mb();
 
         command
+            .env("BRIDGE_TOKEN", bridge_secret)
             .arg("-Dcom.mojang.eula.agree=true")
             .arg(format!("-Xms{min_memory_mb}m"))
             .arg(format!("-Xmx{max_memory_mb}m"))

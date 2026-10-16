@@ -7,6 +7,7 @@ use cloud_core::{
         LogLevel::{self, Error},
         log,
     },
+    util::secret_generator::read_bridge_secret,
 };
 
 #[tokio::main]
