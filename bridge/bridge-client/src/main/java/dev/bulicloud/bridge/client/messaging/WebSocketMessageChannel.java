@@ -87,6 +87,35 @@ public final class WebSocketMessageChannel implements MessageChannel {
         });
     }
 
+    public CompletableFuture<Void> disconnect() {
+        WebSocket ws;
+
+        synchronized (this) {
+            if (state == ChannelState.DISCONNECTED) {
+                return CompletableFuture.completedFuture(null);
+            }
+
+            if (state == ChannelState.CONNECTING) {
+                return CompletableFuture.failedFuture(
+                        new IllegalStateException("Channel is still connecting")
+                );
+            }
+
+            ws = webSocket;
+            webSocket = null;
+            state = ChannelState.DISCONNECTED;
+            currentAttempt = null;
+        }
+
+        if (ws == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        return ws.sendClose(
+                WebSocket.NORMAL_CLOSURE,
+                "Bridge shutting down"
+        ).thenApply(ignored -> (Void) null);
+    }
 
     @Override
     public CompletableFuture<Void> send(CloudMessage message) {

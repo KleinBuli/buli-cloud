@@ -4,12 +4,16 @@ import dev.bulicloud.bridge.client.exception.CloudHttpException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.bulicloud.bridge.client.messaging.WebSocketMessageChannel;
+import dev.bulicloud.bridge.messaging.CloudMessage;
+import dev.bulicloud.bridge.messaging.CloudPacket;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -77,6 +81,34 @@ public final class CloudClient {
                 throw new CompletionException(exception);
             }
         });
+    }
+
+    public static void main(String[] args) {
+
+        var token = "temporary-development-token";
+
+        var channel = new WebSocketMessageChannel(
+                URI.create("ws://127.0.0.1:8080/bridge"),
+                token);
+
+        var payload = new ObjectMapper().createObjectNode()
+                .put("name", "KleinBuli")
+                .put("uuid", UUID.randomUUID().toString());
+
+        var message = new CloudMessage(
+                UUID.randomUUID().toString(),
+                CloudPacket.PLAYER_CONNECTED,
+                payload);
+
+        channel.connect()
+                .thenCompose(ignored -> channel.send(message))
+                .thenRun(() -> System.out.println("Message sent!"))
+                .exceptionally(error -> {
+                    error.printStackTrace();
+                    return null;
+                })
+                .thenCompose(ignored -> channel.disconnect())
+                .join();
     }
 
 }
