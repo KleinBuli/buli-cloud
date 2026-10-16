@@ -82,34 +82,5 @@ public final class CloudClient {
             }
         });
     }
-
-    public static void main(String[] args) {
-
-        var token = "temporary-development-token";
-
-        var channel = new WebSocketMessageChannel(
-                URI.create("ws://127.0.0.1:8080/bridge"),
-                token);
-
-        var payload = new ObjectMapper().createObjectNode()
-                .put("name", "KleinBuli")
-                .put("uuid", UUID.randomUUID().toString());
-
-        var message = new CloudMessage(
-                UUID.randomUUID().toString(),
-                CloudPacket.PLAYER_CONNECTED,
-                payload);
-
-        channel.connect()
-                .thenCompose(ignored -> channel.send(message))
-                .thenRun(() -> System.out.println("Message sent!"))
-                .exceptionally(error -> {
-                    error.printStackTrace();
-                    return null;
-                })
-                .thenCompose(ignored -> channel.disconnect())
-                .join();
-    }
-
 }
 
