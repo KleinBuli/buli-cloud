@@ -1,8 +1,8 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State, WebSocketUpgrade},
-    http::StatusCode,
-    response::Response,
+    extract::{Path, Query, State, WebSocketUpgrade, ws::WebSocket},
+    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use cloud_core::{
@@ -14,6 +14,7 @@ use cloud_core::{
         instance_runtime::InstanceInfo,
     },
     logger::logger::{LogLevel, log},
+    messaging::cloudmessage::handle_bridge_socket,
     templates::template::Template,
     util::software::softwaremanager::ServerSoftware,
 };
@@ -22,6 +23,7 @@ use std::{
     io::{Error, ErrorKind},
     sync::Arc,
 };
+use subtle::ConstantTimeEq;
 
 #[derive(Deserialize)]
 struct GroupRoleQuery {
@@ -189,8 +191,25 @@ async fn disable_group_maintenance(State(core): State<Arc<CloudCore>>, Path(name
     Ok(StatusCode::OK)
 }
 
+async fn bridge_handler(ws: WebSocketUpgrade, headers: HeaderMap) -> Response {
+    let expected_token = "temporary-development-token";
+
+    let authorized = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .is_some_and(|token| bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())));
+
+    if !authorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    ws.max_message_size(64 * 1024).max_frame_size(64 * 1024).on_upgrade(handle_bridge_socket)
+}
+
 pub fn router(core: Arc<CloudCore>) -> Router {
     Router::new()
+        .route("/bridge", get(bridge_handler))
         .route("/health", get(health))
         .route("/reload", post(reload))
         .route("/shutdown", post(shutdown))

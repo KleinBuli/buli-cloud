@@ -25,7 +25,7 @@ use std::{
 };
 
 impl InstanceManager {
-    pub async fn start_instance(&self, id: &str, group_role: GroupRole) -> Result<(), Error> {
+    pub async fn start_instance(&self, id: &str, group_role: GroupRole, bridge_secret: String) -> Result<(), Error> {
         let runtime = self.runtime(id).await?;
         let mut runtime = runtime.lock().await;
 
@@ -74,7 +74,7 @@ impl InstanceManager {
         runtime.set_port(port);
 
         let directory = self.working_directory(runtime.instance());
-        if let Err(error) = runtime.start(&directory) {
+        if let Err(error) = runtime.start(&directory, bridge_secret) {
             runtime.set_status(InstanceStatus::Failed);
             if let Err(cleanup_error) = self.port_allocator().deallocate(port).await {
                 log(LogLevel::Error, &format!("Failed to deallocate port {port}: {cleanup_error}"));

@@ -15,7 +15,7 @@ use crate::{
     },
     util::{
         file_utils::{StagedDirectory, copy_dir_all, validate_name},
-        secret_generator,
+        secret_generator::{self, read_bridge_secret},
         software::softwaremanager::{ServerSoftware, ServerSoftwareManager},
     },
 };
@@ -46,6 +46,7 @@ pub struct CloudCore {
     operations: RwLock<Lifecycle>,
     _data_lock: std::fs::File,
     shutdown_requested: watch::Sender<bool>,
+    bridge_secret: String,
 }
 
 impl CloudCore {
@@ -97,6 +98,7 @@ impl CloudCore {
             operations: RwLock::new(Lifecycle::default()),
             _data_lock: data_lock,
             shutdown_requested: watch::channel(false).0,
+            bridge_secret: "".to_string(),
         })
     }
 
@@ -150,6 +152,10 @@ impl CloudCore {
         self.root_path.join("cache")
     }
 
+    pub fn bridge_secret(&self) -> String {
+        self.bridge_secret.clone()
+    }
+
     async fn require_group(&self, name: &str) -> Result<Group, Error> {
         validate_name(name)?;
         self.group_manager
@@ -160,6 +166,10 @@ impl CloudCore {
 
     async fn ensure_global(&self, group: &str) -> Result<(), Error> {
         fs::create_dir_all(self.templates_path().join(group).join("global")).await
+    }
+
+    pub async fn set_bridge_secret(&mut self, secret: String) {
+        self.bridge_secret = secret;
     }
 
     pub async fn create_group(&self, name: &str, group_role: GroupRole) -> Result<(), Error> {
@@ -408,7 +418,7 @@ impl CloudCore {
         let group = self.require_group(instance.instance().group_name()).await?;
         let group_role = group.role();
 
-        self.instance_manager.start_instance(id, group_role).await
+        self.instance_manager.start_instance(id, group_role, self.bridge_secret.clone()).await
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {
@@ -440,6 +450,32 @@ impl CloudCore {
                 Self::validate_group_template(&group, &template)?;
             }
         }
+        Ok(())
+    }
+
+    pub async fn ensure_bridge_secret(&self) -> Result<(), Error> {
+        let path = self.config_path().join("bridge.secret");
+
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(Error::new(ErrorKind::InvalidData, "bridge secret path is not a regular file"));
+                }
+            }
+
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                secret_generator::create_secret_file(&path).await?;
+            }
+
+            Err(error) => return Err(error),
+        }
+
+        let secret = tokio::fs::read_to_string(&path).await?;
+
+        if secret.len() != 64 || !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::new(ErrorKind::InvalidData, "bridge secret is invalid (expected 64 hex characters)"));
+        }
+
         Ok(())
     }
 
@@ -489,7 +525,7 @@ impl CloudCore {
         Ok(())
     }
 
-    pub async fn initialize(&self) -> Result<(), Error> {
+    pub async fn initialize(&mut self) -> Result<(), Error> {
         let mut operation = self.operations.write().await;
         if operation.shutting_down {
             return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
@@ -509,7 +545,12 @@ impl CloudCore {
         }
 
         fs::create_dir_all(self.cache_path().join("versions")).await?;
+        self.ensure_bridge_secret().await?;
         self.ensure_forwarding_secret().await?;
+
+        let bridge_secret_path = self.config_path().join("bridge.secret");
+        let bridge_secret = read_bridge_secret(&bridge_secret_path).await?;
+        self.bridge_secret = bridge_secret;
 
         let config = self.config_manager.config();
         let version = config.fallback_minecraft_version();

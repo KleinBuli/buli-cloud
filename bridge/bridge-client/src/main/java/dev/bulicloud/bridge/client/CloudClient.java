@@ -59,7 +59,7 @@ public final class CloudClient {
 
     public CompletableFuture<Void> delete(String path) {
         HttpRequest request = HttpRequest.newBuilder().timeout(Duration.ofSeconds(10)).uri(this.baseUri.resolve(path)).DELETE().build();
-        return send(request, new TypeReference<Void>() {});
+        return send(request, new TypeReference<>() {});
     }
 
     private <T> CompletableFuture<T> send(HttpRequest request, TypeReference<T> responseType) {
@@ -78,6 +78,5 @@ public final class CloudClient {
             }
         });
     }
-
 }
 
