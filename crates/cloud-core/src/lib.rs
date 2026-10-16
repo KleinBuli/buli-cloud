@@ -6,5 +6,6 @@ pub mod config;
 pub mod groups;
 pub mod instances;
 pub mod logger;
+pub mod messaging;
 pub mod templates;
 pub mod util;

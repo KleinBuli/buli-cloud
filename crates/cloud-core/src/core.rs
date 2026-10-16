@@ -443,6 +443,32 @@ impl CloudCore {
         Ok(())
     }
 
+    pub async fn ensure_bridge_secret(&self) -> Result<(), Error> {
+        let path = self.config_path().join("bridge.secret");
+
+        match tokio::fs::symlink_metadata(&path).await {
+            Ok(metadata) => {
+                if !metadata.file_type().is_file() {
+                    return Err(Error::new(ErrorKind::InvalidData, "bridge secret path is not a regular file"));
+                }
+            }
+
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                secret_generator::create_secret_file(&path).await?;
+            }
+
+            Err(error) => return Err(error),
+        }
+
+        let secret = tokio::fs::read_to_string(&path).await?;
+
+        if secret.len() != 64 || !secret.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::new(ErrorKind::InvalidData, "bridge secret is invalid (expected 64 hex characters)"));
+        }
+
+        Ok(())
+    }
+
     pub async fn ensure_forwarding_secret(&self) -> Result<(), Error> {
         let path = self.config_path().join("forwarding.secret");
 
@@ -509,6 +535,7 @@ impl CloudCore {
         }
 
         fs::create_dir_all(self.cache_path().join("versions")).await?;
+        self.ensure_bridge_secret().await?;
         self.ensure_forwarding_secret().await?;
 
         let config = self.config_manager.config();

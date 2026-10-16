@@ -9,6 +9,7 @@ axum = { version = "0.8", features = ["ws"]}
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 cloud-core = { path = "../cloud-core" }
+subtle = "2"
 
 [dev-dependencies]
 tempfile = "3.27"
