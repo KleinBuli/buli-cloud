@@ -19,6 +19,12 @@ public class BuliCloudBridgeImpl implements BuliCloudBridge {
         this.cloudClient = Objects.requireNonNull(cloudClient);
     }
 
+    @Override
+    public CompletableFuture<String> health() { return cloudClient.get("health", new TypeReference<String>() {}); }
+
+    @Override
+    public CompletableFuture<String> paths() { return cloudClient.get("paths", new TypeReference<String>() {}); }
+
     private CloudClient getCloudClient() {
         return cloudClient;
     }
@@ -51,7 +57,7 @@ public class BuliCloudBridgeImpl implements BuliCloudBridge {
     @Override
     public CompletableFuture<Void> reload() {
         var path = "reload";
-        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+        var request  = cloudClient.post(path, java.util.Map.of(), new TypeReference<Void>() {});
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)
@@ -62,7 +68,7 @@ public class BuliCloudBridgeImpl implements BuliCloudBridge {
     @Override
     public CompletableFuture<Void> shutdown() {
         var path = "shutdown";
-        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+        var request  = cloudClient.post(path, java.util.Map.of(), new TypeReference<Void>() {});
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)

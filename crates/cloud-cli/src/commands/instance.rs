@@ -1,4 +1,5 @@
 use cloud_core::instances::instance::Instance;
+use cloud_core::instances::instance_runtime::InstanceInfo;
 use cloud_core::logger::logger::{LogLevel, LogLevel::Info, log};
 use futures_util::SinkExt;
 use futures_util::StreamExt;
@@ -13,7 +14,12 @@ pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwes
     let body = response.text().await?;
 
     if status.is_success() {
-        log(Info, &body.to_string())
+        let instances: Vec<InstanceInfo> = serde_json::from_str(&body).expect("Invalid JSON");
+
+        for instance in instances {
+            let line = format!("{} | Status: {}", instance.instance().id(), instance.status().to_string());
+            log(Info, &line);
+        }
     } else {
         log(LogLevel::Error, &format!("Error while requesting instances: {} - {}", body, status))
     }

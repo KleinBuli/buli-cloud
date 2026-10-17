@@ -41,7 +41,7 @@ pub(crate) struct InstanceRuntime {
     confirmed: Arc<AtomicBool>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstanceInfo {
     instance: Instance,
     status: InstanceStatus,
@@ -97,6 +97,18 @@ pub enum InstanceStatus {
     Stopping,
     Stopped,
     Failed,
+}
+
+impl InstanceStatus {
+    pub fn to_string(&self) -> String {
+        match self {
+            InstanceStatus::Starting => "Starting".to_string(),
+            InstanceStatus::Failed => "Failed".to_string(),
+            InstanceStatus::Running => "Running".to_string(),
+            InstanceStatus::Stopped => "Stopped".to_string(),
+            InstanceStatus::Stopping => "Stopping".to_string(),
+        }
+    }
 }
 
 impl InstanceRuntime {
@@ -412,9 +424,15 @@ impl InstanceRuntime {
                     result = child.wait() => {
                         let exit_status = result?;
 
-                        log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
-                        *status.write().unwrap() = InstanceStatus::Failed;
+                        if exit_status.success() {
+                            *status.write().unwrap() = InstanceStatus::Stopped;
+                        } else {
+                            log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
+                            *status.write().unwrap() = InstanceStatus::Failed;
+                        }
+                        
                         return Ok(());
+                        
                     }
                     _ = probe.tick() => {
                         let connected = matches!(tokio::time::timeout(Duration::from_millis(250), tokio::net::TcpStream::connect((endpoint.0.as_str(), endpoint.1))).await, Ok(Ok(_)));

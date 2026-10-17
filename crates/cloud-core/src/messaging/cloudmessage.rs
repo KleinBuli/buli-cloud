@@ -1,4 +1,7 @@
-use crate::CloudCore;
+use crate::{
+    CloudCore,
+    logger::logger::{LogLevel, log},
+};
 use axum::extract::ws::{Message, WebSocket};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -136,11 +139,11 @@ pub async fn handle_bridge_socket(mut socket: WebSocket, core: Arc<CloudCore>, i
                             || message.packet.is_command() {
                             break;
                         }
-                        if matches!(message.packet, CloudPacket::PlayerConnected | CloudPacket::PlayerDisconnected | CloudPacket::PlayerSwitchedServer)
-                            && (!is_proxy || messaging.players.handle(&instance, &message).await.is_err()) {
-                            break;
-                        }
-                        println!("[Bridge] Received {:?} ({}) from {}", message.packet, message.id, instance);
+
+                        let handled = handle_incoming_message(&message, messaging, &instance).await;
+                        if handled.is_err() { break; }
+
+                        log(LogLevel::Info, &format!("[Bridge] Received {:?} ({}) from {}", message.packet, message.id, instance));
                     }
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
                     _ => break,
@@ -151,4 +154,21 @@ pub async fn handle_bridge_socket(mut socket: WebSocket, core: Arc<CloudCore>, i
     messaging.players.remove_proxy(&instance).await;
     messaging.connections.write().await.remove(&instance);
     let _ = tokio::time::timeout(Duration::from_secs(2), socket.send(Message::Close(None))).await;
+}
+
+async fn handle_incoming_message(message: &CloudMessage, messaging: &BridgeMessaging, instance: &String) -> Result<(), Error> {
+    match message.packet {
+        CloudPacket::PlayerConnected | CloudPacket::PlayerDisconnected | CloudPacket::PlayerSwitchedServer => {
+            messaging.players.handle(&instance, &message).await?;
+            Ok(())
+        }
+
+        CloudPacket::ServerReady => Ok(()),
+
+        CloudPacket::ServerStopping => Ok(()),
+
+        CloudPacket::ServerStopped => Ok(()),
+
+        _ => Err(Error::new(ErrorKind::InvalidData, "Invalid Packet received")),
+    }
 }

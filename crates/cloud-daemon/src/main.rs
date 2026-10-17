@@ -21,7 +21,7 @@ async fn main() {
  | |_) | |_| | | | |___| | (_) | |_| | (_| |
  |____/ \__,_|_|_|\____|_|\___/ \__,_|\__,_|
 
-                BuliCloud Daemon
+                BuliCloud CLI
 ──────────────────────────────────────────────────
 "#
     );
@@ -54,6 +54,7 @@ async fn main() {
     let mut server_task = tokio::spawn(async move {
         log(LogLevel::Info, "Starting HTTP-Server at Port 8080....");
         log(LogLevel::Info, "HTTP Server is running");
+        print!("BuliCloud >");
 
         if let Err(error) = start_http_server(server_core).await {
             log(LogLevel::Error, &format!("failed starting http server: {}", error));

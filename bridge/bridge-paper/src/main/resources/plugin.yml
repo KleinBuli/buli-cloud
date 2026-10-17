@@ -1,0 +1,4 @@
+name: BuliCloud
+main: dev.bulicloud.bridge.paper.PaperBridge
+version: 1.0.0
+author: KleinBuli

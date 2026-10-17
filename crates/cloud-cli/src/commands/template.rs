@@ -1,4 +1,7 @@
-use cloud_core::logger::logger::{LogLevel, LogLevel::Info, log};
+use cloud_core::logger::logger::{
+    LogLevel::{self, Info},
+    log,
+};
 use reqwest::{Client, Error};
 
 pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, Error> {
@@ -7,7 +10,12 @@ pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, Error>
     let body = response.text().await?;
 
     if status.is_success() {
-        log(Info, &body.to_string())
+        let templates: Vec<String> = serde_json::from_str(&body).expect("Invalid JSON");
+
+        log(Info, "Registered Templates: ");
+        for template in templates {
+            log(Info, &template.to_string());
+        }
     } else {
         log(LogLevel::Error, &format!("Error while requesting groups: {} - {}", body, status))
     }

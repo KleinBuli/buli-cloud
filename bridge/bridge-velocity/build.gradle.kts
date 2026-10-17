@@ -17,6 +17,10 @@ repositories {
 }
 
 dependencies {
+    testImplementation(platform("org.junit:junit-bom:5.10.0"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    testImplementation("com.velocitypowered:velocity-api:4.2.1-SNAPSHOT")
     implementation(project(":bridge-common"))
     implementation(project(":bridge-client"))
     implementation("com.fasterxml.jackson.core:jackson-databind:2.20.0")
@@ -32,3 +36,5 @@ tasks.jar {
     from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
     exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class", "META-INF/versions/**/module-info.class")
 }
+
+tasks.test { useJUnitPlatform() }

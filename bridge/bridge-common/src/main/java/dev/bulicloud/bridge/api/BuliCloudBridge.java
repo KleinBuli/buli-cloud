@@ -14,6 +14,8 @@ public interface BuliCloudBridge {
     TemplateService templates();
     GroupService groups();
     CloudPlayerService cloudPlayers();
+    CompletableFuture<String> health();
+    CompletableFuture<String> paths();
     CompletableFuture<Void> reload();
     CompletableFuture<Void> shutdown();
 

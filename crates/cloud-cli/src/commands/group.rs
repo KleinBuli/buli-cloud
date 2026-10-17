@@ -1,5 +1,7 @@
+use std::fmt::Debug;
+
 use cloud_core::{
-    groups::group::GroupRole,
+    groups::group::{Group, GroupRole},
     logger::logger::{
         LogLevel::{self, Error, Info},
         log,
@@ -13,7 +15,13 @@ pub(super) async fn list(http_client: &Client, url: &str) -> Result<bool, reqwes
     let body = response.text().await?;
 
     if status.is_success() {
-        log(Info, &body.to_string())
+        let groups: Vec<Group> = serde_json::from_str(&body).expect("Invalid JSON");
+
+        for group in groups {
+            let templates = group.template_names().join(", ");
+            let line = format!("{} | Templates: [{}]", group.name(), templates);
+            log(Info, &line);
+        }
     } else {
         log(Error, &format!("Error while requesting groups: {} - {}", body, status))
     }
