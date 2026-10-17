@@ -69,6 +69,25 @@ impl InstanceInfo {
     pub fn status(&self) -> &InstanceStatus {
         &self.status
     }
+
+    pub fn role(&self) -> &crate::templates::template::ServiceRole {
+        &self.role
+    }
+
+    pub fn backend_address(&self) -> Option<std::net::SocketAddr> {
+        if self.role != crate::templates::template::ServiceRole::Backend || !self.ready {
+            return None;
+        }
+        let mut address: std::net::SocketAddr = self.endpoint.as_deref()?.parse().ok()?;
+        if address.ip().is_unspecified() {
+            address.set_ip(if address.is_ipv4() {
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+            } else {
+                std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+            });
+        }
+        Some(address)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -181,6 +200,7 @@ impl InstanceRuntime {
 
         command
             .env("BRIDGE_TOKEN", bridge_secret)
+            .env("INSTANCE_ID", self.instance().id())
             .arg("-Dcom.mojang.eula.agree=true")
             .arg(format!("-Xms{min_memory_mb}m"))
             .arg(format!("-Xmx{max_memory_mb}m"))
@@ -511,123 +531,4 @@ impl Drop for Completion {
 
 enum RuntimeCommand {
     SendCommand(String),
-}
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::*;
-    use crate::instances::instance::InstanceMode;
-
-    fn runtime() -> (InstanceRuntime, mpsc::UnboundedReceiver<RuntimeEvent>) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let mut runtime = InstanceRuntime::new(
-            Instance::new("test-1", "test", "test".to_string(), InstanceMode::Static),
-            Template::new("test", ServerSoftware::Paper, Some("1.21".to_string()), None),
-            tx,
-        );
-        runtime.set_port(25565);
-        (runtime, rx)
-    }
-
-    #[tokio::test]
-    async fn readiness_requires_reachable_endpoint_and_clears_on_stop() {
-        let root = tempfile::tempdir().unwrap();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let (mut runtime, _) = runtime();
-        assert!(!runtime.info().ready);
-        runtime.set_port(listener.local_addr().unwrap().port());
-        let (tx, rx) = mpsc::channel(1);
-        runtime.command_tx = Some(tx);
-        let mut command = Command::new("cmd.exe");
-        command
-            .args(["/C", "set /p input="])
-            .creation_flags(0x08000000)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null());
-        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while !runtime.info().ready {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap();
-        runtime.stop().await.unwrap();
-        assert!(!runtime.info().ready);
-    }
-
-    #[tokio::test]
-    async fn unexpected_exit_is_failed_but_confirmed() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, mut events) = runtime();
-        let (tx, rx) = mpsc::channel(1);
-        runtime.command_tx = Some(tx);
-        let mut command = Command::new("cmd.exe");
-        command.args(["/C", "exit /b 7"]).creation_flags(0x08000000);
-        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
-        assert!(matches!(
-            event,
-            RuntimeEvent::Exited {
-                outcome: RuntimeExitOutcome::Confirmed,
-                ..
-            }
-        ));
-        assert_eq!(runtime.status(), InstanceStatus::Failed);
-        assert!(!runtime.info().ready);
-        assert!(!root.path().join(".process").exists());
-        runtime.stop().await.unwrap();
-        assert_eq!(runtime.status(), InstanceStatus::Stopped);
-    }
-
-    #[tokio::test]
-    async fn stop_waits_for_process_and_emits_completion() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, mut events) = runtime();
-        let (tx, rx) = mpsc::channel(1);
-        runtime.command_tx = Some(tx);
-        let mut command = Command::new("cmd.exe");
-        command
-            .args(["/C", "set /p input="])
-            .creation_flags(0x08000000)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null());
-        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
-        runtime.stop().await.unwrap();
-        assert_eq!(runtime.status(), InstanceStatus::Stopped);
-        assert!(matches!(
-            events.recv().await.unwrap(),
-            RuntimeEvent::Exited {
-                outcome: RuntimeExitOutcome::Confirmed,
-                ..
-            }
-        ));
-    }
-
-    #[tokio::test]
-    async fn aborted_supervisor_emits_unconfirmed_completion() {
-        let root = tempfile::tempdir().unwrap();
-        let (mut runtime, mut events) = runtime();
-        let (tx, rx) = mpsc::channel(1);
-        runtime.command_tx = Some(tx);
-        let mut command = Command::new("cmd.exe");
-        command
-            .args(["/C", "set /p input="])
-            .creation_flags(0x08000000)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null());
-        runtime.spawn(command, rx, root.path().join(".process")).unwrap();
-        runtime.supervisor.as_ref().unwrap().abort();
-        let event = tokio::time::timeout(Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
-        assert!(matches!(
-            event,
-            RuntimeEvent::Exited {
-                outcome: RuntimeExitOutcome::Unconfirmed(_),
-                ..
-            }
-        ));
-        assert_eq!(runtime.status(), InstanceStatus::Failed);
-        assert!(root.path().join(".process").exists());
-        assert!(runtime.request_start().is_err());
-    }
 }

@@ -7,7 +7,6 @@ use cloud_core::{
         LogLevel::{self, Error},
         log,
     },
-    util::secret_generator::read_bridge_secret,
 };
 
 #[tokio::main]
@@ -30,7 +29,7 @@ async fn main() {
 
     let root_path = std::env::current_exe().unwrap().parent().unwrap().parent().unwrap().join("data");
 
-    let core = match CloudCore::new(root_path).await {
+    let mut core = match CloudCore::new(root_path).await {
         Ok(core) => core,
         Err(error) => {
             log(Error, &format!("Error to create BuliCloud-Core: {error}"));
@@ -38,12 +37,12 @@ async fn main() {
         }
     };
 
-    let core = Arc::new(core);
-
     if let Err(error) = core.initialize().await {
         log(LogLevel::Error, &format!("Failed to initialize BuliCloud-Core: {error}"));
         return;
     }
+
+    let core = Arc::new(core);
 
     log(LogLevel::Info, "BuliCloud-Core initialized");
     log(LogLevel::Info, "BuliCloud daemon is running");

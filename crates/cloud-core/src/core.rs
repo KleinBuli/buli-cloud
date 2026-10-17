@@ -47,6 +47,7 @@ pub struct CloudCore {
     _data_lock: std::fs::File,
     shutdown_requested: watch::Sender<bool>,
     bridge_secret: String,
+    bridge_messaging: crate::messaging::cloudmessage::BridgeMessaging,
 }
 
 impl CloudCore {
@@ -99,6 +100,7 @@ impl CloudCore {
             _data_lock: data_lock,
             shutdown_requested: watch::channel(false).0,
             bridge_secret: "".to_string(),
+            bridge_messaging: Default::default(),
         })
     }
 
@@ -150,6 +152,10 @@ impl CloudCore {
     }
     pub fn cache_path(&self) -> PathBuf {
         self.root_path.join("cache")
+    }
+
+    pub fn bridge_messaging(&self) -> &crate::messaging::cloudmessage::BridgeMessaging {
+        &self.bridge_messaging
     }
 
     pub fn bridge_secret(&self) -> String {
@@ -418,7 +424,9 @@ impl CloudCore {
         let group = self.require_group(instance.instance().group_name()).await?;
         let group_role = group.role();
 
-        self.instance_manager.start_instance(id, group_role, self.bridge_secret.clone()).await
+        self.instance_manager
+            .start_instance(id, group_role, self.bridge_secret.clone(), &self.root_path.join("bridge"))
+            .await
     }
 
     pub async fn stop_instance(&self, id: &str) -> Result<(), Error> {

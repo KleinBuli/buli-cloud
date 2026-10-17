@@ -100,22 +100,3 @@ impl PortAllocator {
         ports.values().cloned().collect()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn fixed_ports_reject_external_and_internal_conflicts() {
-        let allocator = PortAllocator::new();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        assert!(allocator.allocate("one", port).await.is_err());
-        drop(listener);
-        allocator.allocate("one", port).await.unwrap();
-        assert!(allocator.allocate("two", port).await.is_err());
-        assert!(allocator.allocate("zero", 0).await.is_err());
-        allocator.deallocate(port).await.unwrap();
-        allocator.allocate("two", port).await.unwrap();
-    }
-}

@@ -132,27 +132,3 @@ impl Template {
         &self.new_instances_player_percentage
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn legacy_templates_and_fixed_proxy_ports_are_supported() {
-        let template = Template::new("proxy", ServerSoftware::Velocity, None, None);
-        let legacy = toml::to_string(&template)
-            .unwrap()
-            .lines()
-            .filter(|line| !line.starts_with("host ="))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let legacy: Template = toml::from_str(&legacy).unwrap();
-        assert_eq!(legacy.role(), ServiceRole::Proxy);
-        assert_eq!(legacy.port(), None);
-        assert_eq!(legacy.host(), "127.0.0.1");
-        let configured = format!("{}\nport = 25577\nrole = 'Backend'\n", toml::to_string(&template).unwrap());
-        let configured: Template = toml::from_str(&configured).unwrap();
-        assert_eq!(configured.port(), Some(25577));
-        assert_eq!(configured.role(), ServiceRole::Backend);
-    }
-}

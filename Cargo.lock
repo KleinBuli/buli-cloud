@@ -345,6 +345,7 @@ dependencies = [
  "axum",
  "cloud-core",
  "serde",
+ "serde_json",
  "subtle",
  "tempfile",
  "tokio",

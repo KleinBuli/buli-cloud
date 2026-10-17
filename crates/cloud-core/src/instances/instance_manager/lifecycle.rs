@@ -21,11 +21,11 @@ use std::{
         ErrorKind::{self},
         Write,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 impl InstanceManager {
-    pub async fn start_instance(&self, id: &str, group_role: GroupRole, bridge_secret: String) -> Result<(), Error> {
+    pub async fn start_instance(&self, id: &str, group_role: GroupRole, bridge_secret: String, bridge_path: &Path) -> Result<(), Error> {
         let runtime = self.runtime(id).await?;
         let mut runtime = runtime.lock().await;
 
@@ -41,6 +41,10 @@ impl InstanceManager {
 
         if self.working_directory(runtime.instance()).join(".process").exists() {
             return Err(Error::new(ErrorKind::ResourceBusy, "Unconfirmed process ownership"));
+        }
+        if let Err(error) = self.install_bridge(runtime.instance(), runtime.template().server_software(), bridge_path).await {
+            runtime.set_status(InstanceStatus::Failed);
+            return Err(error);
         }
         let port = match self
             .set_port(
@@ -83,6 +87,50 @@ impl InstanceManager {
             return Err(error);
         }
 
+        Ok(())
+    }
+
+    async fn install_bridge(&self, instance: &Instance, software: &ServerSoftware, bridge_path: &Path) -> Result<(), Error> {
+        let (name, descriptor) = match software {
+            ServerSoftware::Velocity => ("bulicloud-bridge-velocity.jar", "velocity-plugin.json"),
+            ServerSoftware::Paper => ("bulicloud-bridge-paper.jar", "plugin.yml"),
+            ServerSoftware::Vanilla | ServerSoftware::Custom => return Ok(()),
+        };
+        let source = bridge_path.join(name);
+        let contents = match fs::read(&source).await {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == ErrorKind::NotFound && software == &ServerSoftware::Paper => {
+                log(LogLevel::Warn, "Paper bridge is not available; starting without a bridge plugin");
+                return Ok(());
+            }
+            Err(error) => {
+                return Err(Error::new(
+                    error.kind(),
+                    format!("Cannot load bridge plugin {}: {error}; build and stage the bridge JAR first", source.display()),
+                ));
+            }
+        };
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&contents)).map_err(|error| Error::new(ErrorKind::InvalidData, error))?;
+        for entry in [
+            descriptor,
+            "dev/bulicloud/bridge/client/CloudClient.class",
+            "dev/bulicloud/bridge/messaging/CloudMessage.class",
+            "com/fasterxml/jackson/databind/ObjectMapper.class",
+        ] {
+            if archive.by_name(entry).is_err() && !(entry == "plugin.yml" && archive.by_name("paper-plugin.yml").is_ok()) {
+                return Err(Error::new(
+                    ErrorKind::InvalidData,
+                    format!("Bridge plugin {} is incomplete: missing {entry}", source.display()),
+                ));
+            }
+        }
+        let directory = self.working_directory(instance);
+        let plugins = directory.join("plugins");
+        fs::create_dir_all(&plugins).await?;
+        if !fs::canonicalize(&plugins).await?.starts_with(fs::canonicalize(&directory).await?) {
+            return Err(Error::new(ErrorKind::InvalidInput, "Plugins directory is outside the instance directory"));
+        }
+        atomic_write(&plugins.join(name), &contents)?;
         Ok(())
     }
 
@@ -159,12 +207,23 @@ impl InstanceManager {
         let content = std::fs::read_to_string(path)?;
         let mut config: serde_yml::Value = serde_yml::from_str(&content).map_err(Error::other)?;
 
-        config["proxies"]["velocity"]["enabled"] = serde_yml::Value::Bool(enabled);
+        fn mapping(value: &mut serde_yml::Value) -> Result<&mut serde_yml::Mapping, Error> {
+            if value.is_null() {
+                *value = serde_yml::Value::Mapping(serde_yml::Mapping::new());
+            }
+            value
+                .as_mapping_mut()
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Paper forwarding configuration must contain YAML mappings"))
+        }
+
+        let proxies = mapping(&mut config)?.entry("proxies").or_insert(serde_yml::Value::Null);
+        let velocity = mapping(proxies)?.entry("velocity").or_insert(serde_yml::Value::Null);
+        let velocity = mapping(velocity)?;
+        velocity.insert("enabled", serde_yml::Value::Bool(enabled));
 
         if enabled {
-            config["proxies"]["velocity"]["online-mode"] = serde_yml::Value::Bool(true);
-
-            config["proxies"]["velocity"]["secret"] = serde_yml::Value::String(secret.to_string());
+            velocity.insert("online-mode", serde_yml::Value::Bool(true));
+            velocity.insert("secret", serde_yml::Value::String(secret.to_string()));
         }
 
         let content = serde_yml::to_string(&config).map_err(Error::other)?;
