@@ -24,3 +24,11 @@ dependencies {
     annotationProcessor("com.velocitypowered:velocity-api:4.2.1-SNAPSHOT")
 
 }
+
+tasks.jar {
+    archiveFileName.set("bulicloud-bridge-velocity.jar")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    manifest.attributes["Multi-Release"] = "true"
+    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })
+    exclude("META-INF/*.SF", "META-INF/*.RSA", "META-INF/*.DSA", "module-info.class", "META-INF/versions/**/module-info.class")
+}

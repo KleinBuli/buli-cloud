@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, Query, State, WebSocketUpgrade, ws::WebSocket},
+    extract::{Path, Query, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
@@ -8,13 +8,12 @@ use axum::{
 use cloud_core::{
     CloudCore,
     groups::group::{Group, GroupRole},
-    instances::{
-        instance::{self, Instance},
-        instance_manager::InstanceManager,
-        instance_runtime::InstanceInfo,
-    },
+    instances::{instance::Instance, instance_manager::InstanceManager, instance_runtime::InstanceInfo},
     logger::logger::{LogLevel, log},
-    messaging::cloudmessage::handle_bridge_socket,
+    messaging::{
+        cloudmessage::{CloudMessage, CloudPacket, handle_bridge_socket},
+        cloudplayer::CloudPlayer,
+    },
     templates::template::Template,
     util::software::softwaremanager::ServerSoftware,
 };
@@ -191,8 +190,8 @@ async fn disable_group_maintenance(State(core): State<Arc<CloudCore>>, Path(name
     Ok(StatusCode::OK)
 }
 
-async fn bridge_handler(ws: WebSocketUpgrade, headers: HeaderMap) -> Response {
-    let expected_token = "temporary-development-token";
+fn authorize_bridge(core: &CloudCore, headers: &HeaderMap) -> Result<(), StatusCode> {
+    let expected_token = core.bridge_secret();
 
     let authorized = headers
         .get(AUTHORIZATION)
@@ -200,16 +199,121 @@ async fn bridge_handler(ws: WebSocketUpgrade, headers: HeaderMap) -> Response {
         .and_then(|value| value.strip_prefix("Bearer "))
         .is_some_and(|token| bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())));
 
-    if !authorized {
-        return StatusCode::UNAUTHORIZED.into_response();
+    if expected_token.is_empty() || !authorized {
+        return Err(StatusCode::UNAUTHORIZED);
     }
+    Ok(())
+}
 
-    ws.max_message_size(64 * 1024).max_frame_size(64 * 1024).on_upgrade(handle_bridge_socket)
+async fn players(State(core): State<Arc<CloudCore>>, headers: HeaderMap) -> Result<Json<Vec<CloudPlayer>>, StatusCode> {
+    authorize_bridge(&core, &headers)?;
+    Ok(Json(core.bridge_messaging().players().all().await))
+}
+
+async fn get_player(State(core): State<Arc<CloudCore>>, headers: HeaderMap, Path(uuid): Path<String>) -> Result<Json<CloudPlayer>, StatusCode> {
+    authorize_bridge(&core, &headers)?;
+    core.bridge_messaging().players().get(&uuid).await.map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TransferPlayer {
+    server: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DisconnectPlayer {
+    reason: String,
+}
+
+async fn transfer_player(
+    State(core): State<Arc<CloudCore>>,
+    headers: HeaderMap,
+    Path(uuid): Path<String>,
+    Json(request): Json<TransferPlayer>,
+) -> Result<StatusCode, StatusCode> {
+    authorize_bridge(&core, &headers)?;
+    let destination = core.instance_manager().get_instance(&request.server).await.ok_or(StatusCode::NOT_FOUND)?;
+    if destination.backend_address().is_none() {
+        return Err(StatusCode::CONFLICT);
+    }
+    send_player_command(
+        &core,
+        &uuid,
+        CloudPacket::TransferPlayer,
+        serde_json::json!({"uuid": uuid, "server": request.server}),
+    )
+    .await
+}
+
+async fn disconnect_player(
+    State(core): State<Arc<CloudCore>>,
+    headers: HeaderMap,
+    Path(uuid): Path<String>,
+    Json(request): Json<DisconnectPlayer>,
+) -> Result<StatusCode, StatusCode> {
+    authorize_bridge(&core, &headers)?;
+    if request.reason.len() > 4096 {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    send_player_command(
+        &core,
+        &uuid,
+        CloudPacket::DisconnectPlayer,
+        serde_json::json!({"uuid": uuid, "reason": request.reason}),
+    )
+    .await
+}
+
+async fn send_player_command(core: &CloudCore, uuid: &str, packet: CloudPacket, payload: serde_json::Value) -> Result<StatusCode, StatusCode> {
+    let player = core.bridge_messaging().players().get(uuid).await.ok_or(StatusCode::NOT_FOUND)?;
+    let id = format!(
+        "player-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .as_nanos()
+    );
+    core.bridge_messaging()
+        .send(&player.proxy_name, CloudMessage { id, packet, payload })
+        .await
+        .map_err(|error| match error.kind() {
+            ErrorKind::NotConnected | ErrorKind::WouldBlock => StatusCode::SERVICE_UNAVAILABLE,
+            ErrorKind::InvalidInput => StatusCode::BAD_REQUEST,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        })?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn bridge_handler(State(core): State<Arc<CloudCore>>, ws: WebSocketUpgrade, headers: HeaderMap) -> Response {
+    if let Err(status) = authorize_bridge(&core, &headers) {
+        return status.into_response();
+    }
+    let Some(instance) = headers.get("X-Instance-Id").and_then(|value| value.to_str().ok()).map(str::to_owned) else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let Some(info) = core.instance_manager().get_instance(&instance).await else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    if !matches!(
+        info.status(),
+        cloud_core::instances::instance_runtime::InstanceStatus::Starting | cloud_core::instances::instance_runtime::InstanceStatus::Running
+    ) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    ws.max_message_size(64 * 1024)
+        .max_frame_size(64 * 1024)
+        .on_upgrade(move |socket| handle_bridge_socket(socket, core, instance))
 }
 
 pub fn router(core: Arc<CloudCore>) -> Router {
     Router::new()
         .route("/bridge", get(bridge_handler))
+        .route("/players", get(players))
+        .route("/players/{uuid}", get(get_player))
+        .route("/players/{uuid}/transfer", post(transfer_player))
+        .route("/players/{uuid}/disconnect", post(disconnect_player))
         .route("/health", get(health))
         .route("/reload", post(reload))
         .route("/shutdown", post(shutdown))
@@ -239,4 +343,56 @@ pub async fn start_http_server(core: Arc<CloudCore>) -> std::io::Result<()> {
         .with_graceful_shutdown(async move { shutdown.wait_for_shutdown().await })
         .await
         .map_err(Error::other)
+}
+
+#[cfg(test)]
+mod player_tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn player_routes_require_authentication_and_return_json_or_not_found() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut core = CloudCore::new(directory.path()).await.unwrap();
+        core.set_bridge_secret("test-secret".into()).await;
+        let app = router(Arc::new(core));
+        for authorization in [None, Some("Bearer incorrect")] {
+            let mut request = Request::builder().uri("/players");
+            if let Some(value) = authorization {
+                request = request.header(AUTHORIZATION, value);
+            }
+            assert_eq!(
+                app.clone().oneshot(request.body(Body::empty()).unwrap()).await.unwrap().status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/players")
+                    .header(AUTHORIZATION, "Bearer test-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(&to_bytes(response.into_body(), 1024).await.unwrap()[..], b"[]");
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/players/c5c8f17d-cd99-4d5d-933f-b732fe6bd194")
+                    .header(AUTHORIZATION, "Bearer test-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }

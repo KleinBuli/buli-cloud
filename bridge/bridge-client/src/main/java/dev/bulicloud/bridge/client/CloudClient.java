@@ -22,20 +22,22 @@ public final class CloudClient {
     private final ObjectMapper objectMapper;
 
     private final MessageChannel messageChannel;
+    private final String token;
 
     public CloudClient(String httpBaseUrl, String token) {
 
-        if (!httpBaseUrl.startsWith("http://") || !httpBaseUrl.startsWith("https://"))
+        if (!httpBaseUrl.startsWith("http://") && !httpBaseUrl.startsWith("https://"))
             throw new IllegalArgumentException("HTTP BaseURL should start with http(s)://");
 
         if(!httpBaseUrl.endsWith("/")) {
             throw new IllegalArgumentException("HTTP BaseURL should stop with / (e. g. http://127.0.0.1:8080/)");
         }
 
+        this.token = java.util.Objects.requireNonNull(token);
         baseUri = URI.create(httpBaseUrl);
         httpClient = HttpClient.newBuilder().build();
         objectMapper = new ObjectMapper();
-        messageChannel = new WebSocketMessageChannel(URI.create("ws://127.0.0.1:8080/bridge"), token);
+        messageChannel = new WebSocketMessageChannel(URI.create(("https".equals(baseUri.getScheme()) ? "wss" : "ws") + ":" + baseUri.resolve("bridge").getRawSchemeSpecificPart()), token);
     }
 
     public <T> CompletableFuture<T> get(String path, TypeReference<T> responseType) {
@@ -68,12 +70,14 @@ public final class CloudClient {
     }
 
     private <T> CompletableFuture<T> send(HttpRequest request, TypeReference<T> responseType) {
-        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
+        HttpRequest authenticated = HttpRequest.newBuilder(request, (name, value) -> !name.equalsIgnoreCase("Authorization"))
+                .header("Authorization", "Bearer " + token).build();
+        return httpClient.sendAsync(authenticated, HttpResponse.BodyHandlers.ofString()).thenApply(response -> {
             if(response.statusCode() < 200 || response.statusCode() >= 300)
                 throw new CloudHttpException(response.statusCode(), "HTTP " + response.statusCode() + ": " + response.body());
 
 
-            if (responseType == null)
+            if (responseType == null || responseType.getType() == Void.class)
                 return null;
 
             try {

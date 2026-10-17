@@ -8,6 +8,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
 import java.util.Objects;
+import java.time.Duration;
+import java.nio.charset.StandardCharsets;
+import java.util.function.Consumer;
 import java.util.concurrent.CompletableFuture;
 
 public final class WebSocketMessageChannel implements MessageChannel {
@@ -16,6 +19,7 @@ public final class WebSocketMessageChannel implements MessageChannel {
     private final URI endpoint;
     private final ObjectMapper mapper;
     private final String token;
+    private volatile Consumer<CloudMessage> messageHandler = message -> {};
 
     private WebSocket webSocket;
     private ChannelState state = ChannelState.DISCONNECTED;
@@ -25,10 +29,14 @@ public final class WebSocketMessageChannel implements MessageChannel {
 
     private CompletableFuture<Void> sendTail = CompletableFuture.completedFuture(null);
     private int pending = 0;
+    private boolean closing;
 
     public WebSocketMessageChannel(URI endpoint, String token) {
         this.endpoint = Objects.requireNonNull(endpoint);
         this.token = Objects.requireNonNull(token);
+        if (token.isBlank()) {
+            throw new IllegalArgumentException("Bridge token is required");
+        }
 
         if (!"ws".equalsIgnoreCase(endpoint.getScheme()) && !"wss".equalsIgnoreCase(endpoint.getScheme())) {
             throw new IllegalArgumentException("Invalid WebSocket scheme");
@@ -42,6 +50,19 @@ public final class WebSocketMessageChannel implements MessageChannel {
         this.mapper = new ObjectMapper();
     }
 
+    @Override
+    public void onMessage(Consumer<CloudMessage> handler) {
+        messageHandler = Objects.requireNonNull(handler);
+    }
+
+    private void receive(String json) {
+        try {
+            messageHandler.accept(mapper.readValue(json, CloudMessage.class));
+        } catch (Exception error) {
+            throw new IllegalArgumentException("Invalid bridge message", error);
+        }
+    }
+
     public CompletableFuture<Void> connect() {
         ConnectionAttempt attempt;
 
@@ -50,6 +71,7 @@ public final class WebSocketMessageChannel implements MessageChannel {
                 return CompletableFuture.failedFuture(new IllegalStateException("Channel already connecting or connected"));
             }
 
+            closing = false;
             state = ChannelState.CONNECTING;
             attempt = new ConnectionAttempt();
             currentAttempt = attempt;
@@ -58,7 +80,10 @@ public final class WebSocketMessageChannel implements MessageChannel {
         CompletableFuture<WebSocket> connection;
 
         try {
-            connection = client.newWebSocketBuilder().header("Authorization", "Bearer " + token).buildAsync(endpoint, new ChannelWebSocketListener(ws -> handleDisconnect(attempt, ws)));
+            connection = client.newWebSocketBuilder().connectTimeout(Duration.ofSeconds(10))
+                    .header("Authorization", "Bearer " + token)
+                    .header("X-Instance-Id", Objects.requireNonNull(System.getenv("INSTANCE_ID"), "INSTANCE_ID is required"))
+                    .buildAsync(endpoint, new ChannelWebSocketListener(ws -> handleDisconnect(attempt, ws), this::receive));
         } catch (RuntimeException error) {
             failConnection(attempt);
             return CompletableFuture.failedFuture(error);
@@ -89,6 +114,7 @@ public final class WebSocketMessageChannel implements MessageChannel {
 
     public CompletableFuture<Void> disconnect() {
         WebSocket ws;
+        CompletableFuture<Void> tail;
 
         synchronized (this) {
             if (state == ChannelState.DISCONNECTED) {
@@ -101,20 +127,28 @@ public final class WebSocketMessageChannel implements MessageChannel {
                 );
             }
 
+            closing = true;
             ws = webSocket;
-            webSocket = null;
-            state = ChannelState.DISCONNECTED;
-            currentAttempt = null;
+            tail = sendTail;
         }
 
         if (ws == null) {
             return CompletableFuture.completedFuture(null);
         }
 
-        return ws.sendClose(
-                WebSocket.NORMAL_CLOSURE,
-                "Bridge shutting down"
-        ).thenApply(ignored -> (Void) null);
+        return tail.thenCompose(ignored -> ws.sendClose(WebSocket.NORMAL_CLOSURE, "Bridge shutting down"))
+                .orTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                .handle((result, error) -> {
+                    ws.abort();
+                    synchronized (this) {
+                        if (webSocket == ws) {
+                            webSocket = null;
+                            state = ChannelState.DISCONNECTED;
+                            currentAttempt = null;
+                        }
+                    }
+                    return null;
+                });
     }
 
     @Override
@@ -125,12 +159,15 @@ public final class WebSocketMessageChannel implements MessageChannel {
 
         try {
             json = mapper.writeValueAsString(message);
+            if (json.getBytes(StandardCharsets.UTF_8).length > 64 * 1024) {
+                throw new IllegalArgumentException("Bridge message is too large");
+            }
         } catch (Exception error) {
             return CompletableFuture.failedFuture(error);
         }
 
         synchronized (this) {
-            if (state != ChannelState.CONNECTED || webSocket == null) {
+            if (closing || state != ChannelState.CONNECTED || webSocket == null) {
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("MessageChannel is not connected")
                 );
