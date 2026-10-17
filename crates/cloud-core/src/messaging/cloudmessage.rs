@@ -1,4 +1,7 @@
-use crate::CloudCore;
+use crate::{
+    CloudCore,
+    logger::logger::{LogLevel, log},
+};
 use axum::extract::ws::{Message, WebSocket};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -140,7 +143,7 @@ pub async fn handle_bridge_socket(mut socket: WebSocket, core: Arc<CloudCore>, i
                             && (!is_proxy || messaging.players.handle(&instance, &message).await.is_err()) {
                             break;
                         }
-                        println!("[Bridge] Received {:?} ({}) from {}", message.packet, message.id, instance);
+                        log(LogLevel::Info, &format!("[Bridge] Received {:?} ({}) from {}", message.packet, message.id, instance));
                     }
                     Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
                     _ => break,

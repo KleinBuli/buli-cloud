@@ -41,7 +41,7 @@ pub(crate) struct InstanceRuntime {
     confirmed: Arc<AtomicBool>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InstanceInfo {
     instance: Instance,
     status: InstanceStatus,
@@ -97,6 +97,18 @@ pub enum InstanceStatus {
     Stopping,
     Stopped,
     Failed,
+}
+
+impl InstanceStatus {
+    pub fn to_string(&self) -> String {
+        match self {
+            InstanceStatus::Starting => "Starting".to_string(),
+            InstanceStatus::Failed => "Failed".to_string(),
+            InstanceStatus::Running => "Running".to_string(),
+            InstanceStatus::Stopped => "Stopped".to_string(),
+            InstanceStatus::Stopping => "Stopping".to_string(),
+        }
+    }
 }
 
 impl InstanceRuntime {
