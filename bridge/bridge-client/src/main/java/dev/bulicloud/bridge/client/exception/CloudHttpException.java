@@ -4,6 +4,8 @@ public class CloudHttpException extends RuntimeException {
 
     private final int statusCode;
 
+    public int statusCode() { return statusCode; }
+
     public CloudHttpException(int statusCode, String message) {
 
         super(message);

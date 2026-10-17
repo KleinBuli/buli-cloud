@@ -20,8 +20,8 @@ public class TemplateServiceImpl implements TemplateService {
 
     @Override
     public CompletableFuture<Void> create(String groupName, String name) {
-        var path = String.format("templates/new/%s/%s", groupName, name);
-        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+        var path = String.format("templates/%s/%s", groupName, name);
+        var request  = cloudClient.post(path, java.util.Map.of(), new TypeReference<Void>() {});
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)
@@ -31,7 +31,7 @@ public class TemplateServiceImpl implements TemplateService {
 
     @Override
     public CompletableFuture<Void> delete(String groupName, String name) {
-        var path = String.format("templates/new/%s/%s", groupName, name);
+        var path = String.format("templates/%s/%s", groupName, name);
         var request  = cloudClient.delete(path);
 
         return request.whenComplete((result, throwable) -> {
@@ -55,7 +55,14 @@ public class TemplateServiceImpl implements TemplateService {
     @Override
     public CompletableFuture<List<CloudTemplate>> all() {
         var path = "templates";
-        var request  = cloudClient.get(path, new TypeReference<List<CloudTemplate>>() {});
+        var request  = cloudClient.get(path, new TypeReference<List<String>>() {}).thenCompose(names -> {
+            var requests = names.stream().map(name -> {
+                var parts = name.split("/", 2);
+                return get(parts[0], parts[1]);
+            }).toList();
+            return CompletableFuture.allOf(requests.toArray(CompletableFuture[]::new))
+                    .thenApply(ignored -> requests.stream().map(CompletableFuture::join).toList());
+        });
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)

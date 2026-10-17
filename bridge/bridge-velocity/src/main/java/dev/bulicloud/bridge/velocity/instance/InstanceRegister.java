@@ -3,7 +3,6 @@ package dev.bulicloud.bridge.velocity.instance;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.ServerInfo;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import dev.bulicloud.bridge.velocity.VelocityBridge;
 import java.net.InetSocketAddress;
 import java.util.HashMap;
 import java.util.Map;
@@ -15,10 +14,6 @@ public class InstanceRegister {
     private final ProxyServer proxy;
     private final Map<String, ServerInfo> managed = new HashMap<>();
     private final Map<String, String> groups = new HashMap<>();
-
-    public InstanceRegister() {
-        this(VelocityBridge.getInstance().getServer());
-    }
 
     public InstanceRegister(ProxyServer proxy) {
         this.proxy = Objects.requireNonNull(proxy);

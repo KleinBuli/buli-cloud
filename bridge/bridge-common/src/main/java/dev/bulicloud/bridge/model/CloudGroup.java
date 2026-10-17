@@ -4,4 +4,5 @@ import dev.bulicloud.bridge.model.enums.GroupRole;
 
 import java.util.List;
 
-public record CloudGroup(String id, String groupName, GroupRole groupRole, List<String> template_names, boolean maintenance) {  }
+@com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+public record CloudGroup(String id, @com.fasterxml.jackson.annotation.JsonProperty("name") String groupName, @com.fasterxml.jackson.annotation.JsonProperty("role") GroupRole groupRole, List<String> template_names, boolean maintenance) {  }

@@ -19,9 +19,14 @@ public final class GroupServiceImpl implements GroupService {
     }
 
     @Override
-    public CompletableFuture<Void> create(String name) {
-        var path = String.format("groups/%s", name);
-        var request  = cloudClient.post(path, new Object(), new TypeReference<Void>() {});
+    public CompletableFuture<Void> create(String name, dev.bulicloud.bridge.model.enums.GroupRole role) {
+        var wireRole = switch (role) {
+            case PROXY -> "Proxy";
+            case PROXIED_SERVER -> "ProxiedServer";
+            case STANDALONE_SERVER -> "StandaloneServer";
+        };
+        var path = String.format("groups/%s?role=%s", name, wireRole);
+        var request  = cloudClient.post(path, java.util.Map.of(), new TypeReference<Void>() {});
 
         return request.whenComplete((result, throwable) -> {
             if (throwable != null)
@@ -45,7 +50,7 @@ public final class GroupServiceImpl implements GroupService {
         var path = String.format("groups/%s/maintenance", name);
 
         CompletableFuture<Void> request = maintenance
-                ? cloudClient.post(path, new Object(), new TypeReference<Void>() {})
+                ? cloudClient.post(path, java.util.Map.of(), new TypeReference<Void>() {})
                 : cloudClient.delete(path);
 
         return request.whenComplete((result, throwable) -> {

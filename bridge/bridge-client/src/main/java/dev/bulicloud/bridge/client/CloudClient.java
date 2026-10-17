@@ -80,6 +80,10 @@ public final class CloudClient {
             if (responseType == null || responseType.getType() == Void.class)
                 return null;
 
+            if (responseType.getType() == String.class) {
+                @SuppressWarnings("unchecked") T text = (T) response.body();
+                return text;
+            }
             try {
                 return objectMapper.readValue(response.body(), responseType);
             } catch (JsonProcessingException exception) {

@@ -10,6 +10,7 @@ public interface InstanceService {
     CompletableFuture<Void> create(String group, String cloudTemplate);
     CompletableFuture<Void> start(String id);
     CompletableFuture<Void> stop(String id);
+    CompletableFuture<Void> delete(String id);
     CompletableFuture<CloudInstance> get(String id);
     CompletableFuture<List<CloudInstance>> all();
 
