@@ -27,9 +27,16 @@ subprojects {
 }
 
 val stageBridges by tasks.registering(Copy::class) {
-    dependsOn(":bridge-velocity:jar")
-    from(project(":bridge-velocity").layout.buildDirectory.file("libs/bulicloud-bridge-velocity.jar"))
+    dependsOn(":bridge-velocity:jar", ":bridge-paper:jar")
+
+    from(project(":bridge-velocity").tasks.named("jar"))
+    from(project(":bridge-paper").tasks.named("jar"))
+
     into(layout.projectDirectory.dir("../dist/data/bridge"))
+}
+
+tasks.named("build") {
+    finalizedBy(stageBridges)
 }
 
 tasks.named("assemble") {

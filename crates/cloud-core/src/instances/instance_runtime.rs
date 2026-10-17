@@ -424,9 +424,15 @@ impl InstanceRuntime {
                     result = child.wait() => {
                         let exit_status = result?;
 
-                        log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
-                        *status.write().unwrap() = InstanceStatus::Failed;
+                        if exit_status.success() {
+                            *status.write().unwrap() = InstanceStatus::Stopped;
+                        } else {
+                            log(LogLevel::Error, &format!("Java process exited with status: {exit_status}"));
+                            *status.write().unwrap() = InstanceStatus::Failed;
+                        }
+                        
                         return Ok(());
+                        
                     }
                     _ = probe.tick() => {
                         let connected = matches!(tokio::time::timeout(Duration::from_millis(250), tokio::net::TcpStream::connect((endpoint.0.as_str(), endpoint.1))).await, Ok(Ok(_)));
