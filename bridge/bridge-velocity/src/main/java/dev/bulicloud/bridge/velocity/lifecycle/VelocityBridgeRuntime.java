@@ -13,6 +13,7 @@ import dev.bulicloud.bridge.velocity.command.PlayerCommandHandler;
 import dev.bulicloud.bridge.velocity.command.ServerCommandHandler;
 import dev.bulicloud.bridge.velocity.events.InitialServerListener;
 import dev.bulicloud.bridge.velocity.events.ServerConnectedListener;
+import dev.bulicloud.bridge.velocity.fallback.FallbackManager;
 import dev.bulicloud.bridge.velocity.instance.InstanceRegister;
 import dev.bulicloud.bridge.velocity.messaging.CloudNotificationService;
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ public final class VelocityBridgeRuntime {
     private final CloudCommandHandler commands;
     private final InitialServerListener initialServerListener;
     private final ServerConnectedListener serverConnectedListener;
+    private final FallbackManager fallbackManager;
 
     public VelocityBridgeRuntime(Object plugin, ProxyServer server, Logger logger) {
         this.plugin = plugin;
@@ -46,6 +48,8 @@ public final class VelocityBridgeRuntime {
                 new ServerCommandHandler(instances), new PlayerCommandHandler(server, instances, logger));
         initialServerListener = new InitialServerListener(server, instances);
         serverConnectedListener = new ServerConnectedListener(notifications);
+        fallbackManager = new FallbackManager(server);
+
     }
 
     public void start() {
@@ -80,5 +84,13 @@ public final class VelocityBridgeRuntime {
             server.getEventManager().unregisterListener(plugin, serverConnectedListener);
             BuliCloudProvider.unregister(bridge);
         }
+    }
+
+    public BuliCloudBridge getBridge() {
+        return bridge;
+    }
+
+    public FallbackManager getFallbackManager() {
+        return fallbackManager;
     }
 }

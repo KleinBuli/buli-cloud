@@ -14,6 +14,7 @@ public interface GroupService {
     CompletableFuture<Void> delete(String name);
     CompletableFuture<Void> setMaintenance(String name, boolean maintenance);
     CompletableFuture<CloudGroup> get(String name);
+    CompletableFuture<List<String>> fallback();
     CompletableFuture<List<CloudGroup>> all();
 
 }

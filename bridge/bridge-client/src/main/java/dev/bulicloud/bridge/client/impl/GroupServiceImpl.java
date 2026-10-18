@@ -73,6 +73,18 @@ public final class GroupServiceImpl implements GroupService {
     }
 
     @Override
+    public CompletableFuture<List<String>> fallback() {
+        var path = "groups/fallback";
+        var request  = cloudClient.get(path, new TypeReference<List<String>>() {
+        });
+
+        return request.whenComplete((result, throwable) -> {
+            if (throwable != null)
+                System.err.println(throwable.getMessage());
+        });
+    }
+
+    @Override
     public CompletableFuture<List<CloudGroup>> all() {
         var path = "groups";
         var request  = cloudClient.get(path, new TypeReference<List<CloudGroup>>() {

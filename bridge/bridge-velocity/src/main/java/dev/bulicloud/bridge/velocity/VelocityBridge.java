@@ -6,6 +6,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.proxy.ProxyServer;
+import dev.bulicloud.bridge.api.BuliCloudBridge;
 import dev.bulicloud.bridge.velocity.lifecycle.VelocityBridgeRuntime;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
@@ -20,6 +21,7 @@ import org.slf4j.Logger;
 public final class VelocityBridge {
 
     private static Component PREFIX = Component.empty();
+    private static VelocityBridge instance;
 
     private final ProxyServer server;
     private final Logger logger;
@@ -27,6 +29,7 @@ public final class VelocityBridge {
 
     @Inject
     public VelocityBridge(ProxyServer server, Logger logger) {
+        instance = this;
         this.server = server;
         this.logger = logger;
 
@@ -53,5 +56,17 @@ public final class VelocityBridge {
 
     public static Component prefix() {
         return PREFIX;
+    }
+
+    public static VelocityBridge getInstance() {
+        return instance;
+    }
+
+    public BuliCloudBridge getBridge() {
+        return getRuntime().getBridge();
+    }
+
+    public VelocityBridgeRuntime getRuntime() {
+        return runtime;
     }
 }
