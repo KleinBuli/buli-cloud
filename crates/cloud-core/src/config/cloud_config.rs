@@ -7,6 +7,7 @@ pub struct Config {
     fallback_minecraft_version: String,
     http_ip: String,
     http_port: i32,
+    fallback_groups: Vec<String>,
 }
 
 impl Default for Config {
@@ -17,6 +18,7 @@ impl Default for Config {
             fallback_minecraft_version: String::from("1.21.11"),
             http_ip: String::from("127.0.0.1"),
             http_port: 8080,
+            fallback_groups: vec![],
         }
     }
 }
@@ -38,6 +40,10 @@ impl Config {
 
     pub fn http_port(&self) -> &i32 {
         &self.http_port
+    }
+
+    pub fn fallback_groups(&self) -> &Vec<String> {
+        &self.fallback_groups
     }
 
     pub fn set_server_software(&mut self, server_software: &str) {

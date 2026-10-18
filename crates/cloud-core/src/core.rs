@@ -1,5 +1,5 @@
 use crate::{
-    config::config_manager::ConfigManager,
+    config::{cloud_config::Config, config_manager::ConfigManager},
     groups::{
         group::{Group, GroupRole},
         group_manager::GroupManager,
@@ -562,6 +562,7 @@ impl CloudCore {
 
         let config = self.config_manager.config();
         let version = config.fallback_minecraft_version();
+        self.ensure_fallback_groups(&config).await?;
         self.server_software_manager.ensure_paper_available(version).await?;
         self.server_software_manager.ensure_mojang_mapping(version).await?;
         self.server_software_manager.ensure_velocity_available().await?;
@@ -586,10 +587,25 @@ impl CloudCore {
         Ok(())
     }
 
+    async fn ensure_fallback_groups(&self, config: &Config) -> Result<(), Error> {
+        for fallback_group in config.fallback_groups() {
+            if self.group_manager.get_group(fallback_group).await.is_none() {
+                return Err(Error::new(
+                    ErrorKind::NotFound,
+                    format!("Specified fallback group {fallback_group} does not exist."),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn reload(&self) -> Result<(), Error> {
         let _operation = self.operation().await?;
 
         let config = self.config_manager.read_config().await?;
+        self.ensure_fallback_groups(&config).await?;
+
         let groups = self.group_manager.read_groups_from_config()?;
         let templates = self.template_manager.prepare_reload(&groups)?;
 
