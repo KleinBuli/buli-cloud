@@ -20,6 +20,7 @@ use crate::{
     },
 };
 use std::{
+    collections::HashSet,
     io::{Error, ErrorKind},
     path::PathBuf,
     sync::Arc,
@@ -322,10 +323,6 @@ impl CloudCore {
 
         let group_config = self.require_group(group).await?;
 
-        if group_config.maintenance() {
-            return Err(Error::new(ErrorKind::ResourceBusy, "Group is in maintenance"));
-        }
-
         if !group_config.template_names().iter().any(|n| n == name) {
             return Err(Error::new(ErrorKind::NotFound, "Template not assigned to group"));
         }
@@ -562,7 +559,6 @@ impl CloudCore {
 
         let config = self.config_manager.config();
         let version = config.fallback_minecraft_version();
-        self.ensure_fallback_groups(&config).await?;
         self.server_software_manager.ensure_paper_available(version).await?;
         self.server_software_manager.ensure_mojang_mapping(version).await?;
         self.server_software_manager.ensure_velocity_available().await?;
@@ -580,6 +576,8 @@ impl CloudCore {
             let group = self.require_group(group.name()).await?;
             self.template_manager.load_group_templates(group.name(), group.template_names()).await?;
         }
+
+        self.ensure_fallback_groups(&config).await?;
         self.validate_groups().await?;
         self.restore_static_instances().await?;
 
@@ -588,11 +586,23 @@ impl CloudCore {
     }
 
     async fn ensure_fallback_groups(&self, config: &Config) -> Result<(), Error> {
+        let mut seen = HashSet::new();
+
         for fallback_group in config.fallback_groups() {
-            if self.group_manager.get_group(fallback_group).await.is_none() {
+            if !seen.insert(fallback_group.to_lowercase()) {
+                return Err(Error::new(ErrorKind::InvalidInput, format!("Duplicate fallback group: {fallback_group}")));
+            }
+
+            let group = self
+                .group_manager
+                .get_group(fallback_group)
+                .await
+                .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("Specified fallback group \"{fallback_group}\" does not exist.")))?;
+
+            if group.role() != GroupRole::ProxiedServer {
                 return Err(Error::new(
-                    ErrorKind::NotFound,
-                    format!("Specified fallback group {fallback_group} does not exist."),
+                    ErrorKind::InvalidInput,
+                    format!("Fallback group \"{fallback_group}\" must be a proxied server group."),
                 ));
             }
         }

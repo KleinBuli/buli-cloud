@@ -20,7 +20,6 @@ use cloud_core::{
 use serde::Deserialize;
 use std::{
     io::{Error, ErrorKind},
-    ops::Deref,
     sync::Arc,
 };
 use subtle::ConstantTimeEq;

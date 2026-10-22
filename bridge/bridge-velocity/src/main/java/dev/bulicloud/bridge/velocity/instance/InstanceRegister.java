@@ -9,11 +9,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Comparator;
+import java.util.List;
 
 public class InstanceRegister {
     private final ProxyServer proxy;
     private final Map<String, ServerInfo> managed = new HashMap<>();
     private final Map<String, String> groups = new HashMap<>();
+
+    private List<String> fallbackGroups = List.of();
 
     public InstanceRegister(ProxyServer proxy) {
         this.proxy = Objects.requireNonNull(proxy);
@@ -44,6 +47,21 @@ public class InstanceRegister {
         return managed.values().stream()
                 .filter(info -> info.getName().equalsIgnoreCase(nameOrGroup)
                         || nameOrGroup.equalsIgnoreCase(groups.get(info.getName())))
+                .map(info -> proxy.getServer(info.getName()).filter(server -> server.getServerInfo().equals(info)))
+                .flatMap(Optional::stream)
+                .min(Comparator.comparingInt((RegisteredServer server) -> server.getPlayersConnected().size())
+                        .thenComparing(server -> server.getServerInfo().getName()));
+    }
+
+    public synchronized void setFallbackGroups(List<String> groups) {
+        fallbackGroups = List.copyOf(groups);
+    }
+
+    public synchronized Optional<RegisteredServer> findFallbackServer() {
+        if (!fallbackGroups.isEmpty()) {
+            return fallbackGroups.stream().map(this::findServer).flatMap(Optional::stream).findFirst();
+        }
+        return managed.values().stream()
                 .map(info -> proxy.getServer(info.getName()).filter(server -> server.getServerInfo().equals(info)))
                 .flatMap(Optional::stream)
                 .min(Comparator.comparingInt((RegisteredServer server) -> server.getPlayersConnected().size())

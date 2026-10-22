@@ -31,5 +31,6 @@ public final class InitialServerListener {
                 return;
             }
         }
+        instances.findFallbackServer().ifPresent(event::setInitialServer);
     }
 }
