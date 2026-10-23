@@ -211,6 +211,28 @@ pub fn set_velocity_property(path: &Path, key: &str, value: toml::Value) -> Resu
     return atomic_write(path, toml::to_string_pretty(&config).map_err(Error::other)?.as_bytes());
 }
 
+pub fn clear_velocity_servers(path: &Path) -> Result<(), Error> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error),
+    };
+
+    let mut config: toml::Table = toml::from_str(&content).map_err(Error::other)?;
+
+    let servers = config
+        .entry("servers")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| Error::new(ErrorKind::InvalidData, "[servers] is not a table"))?;
+
+    servers.clear();
+    servers.insert("try".to_string(), toml::Value::Array(vec![]));
+    config.remove("try");
+    config.insert("forced-hosts".to_string(), toml::Value::Table(toml::Table::new()));
+
+    atomic_write(path, toml::to_string_pretty(&config).map_err(Error::other)?.as_bytes())
+}
 pub async fn set_paper_property(paper_yml_path: &Path, entry: &str, value: serde_yml::Value) -> Result<(), Error> {
     if !paper_yml_path.exists() || paper_yml_path.file_name().unwrap() != "paper-global.yml" {
         return Err(Error::new(ErrorKind::NotFound, "Path is not a paper-global.yml file"));

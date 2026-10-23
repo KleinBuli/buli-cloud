@@ -9,7 +9,7 @@ use crate::{
     },
     logger::logger::{LogLevel, log},
     util::{
-        file_utils::{atomic_write, set_server_property, set_velocity_property},
+        file_utils::{atomic_write, clear_velocity_servers, set_server_property, set_velocity_property},
         secret_generator::create_file,
         software::softwaremanager::ServerSoftware,
     },
@@ -32,6 +32,7 @@ impl InstanceManager {
         if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(Error::new(ErrorKind::ResourceBusy, "Cloud is shutting down"));
         }
+
         runtime.request_start()?;
         match runtime.status() {
             InstanceStatus::Starting | InstanceStatus::Running => return Ok(()),
@@ -165,7 +166,8 @@ impl InstanceManager {
                 let path = self.working_directory(instance).join("velocity.toml");
                 set_velocity_property(&path, "online-mode", toml::Value::Boolean(true))?;
                 set_velocity_property(&path, "forwarding-secret-file", toml::Value::String("forwarding.secret".to_string()))?;
-                set_velocity_property(&path, "player-info-forwarding-mode", toml::Value::String("modern".to_string()))
+                set_velocity_property(&path, "player-info-forwarding-mode", toml::Value::String("modern".to_string()))?;
+                clear_velocity_servers(&path)
             }
 
             GroupRole::StandaloneServer => {

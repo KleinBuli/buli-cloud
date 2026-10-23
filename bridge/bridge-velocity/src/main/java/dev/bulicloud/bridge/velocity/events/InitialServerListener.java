@@ -20,6 +20,7 @@ public final class InitialServerListener {
     @Subscribe
     public void onChooseInitialServer(PlayerChooseInitialServerEvent event) {
         var config = server.getConfiguration();
+
         var targets = event.getPlayer().getVirtualHost()
                 .map(host -> config.getForcedHosts().get(host.getHostString().toLowerCase(Locale.ROOT)))
                 .orElse(config.getAttemptConnectionOrder());
@@ -30,5 +31,6 @@ public final class InitialServerListener {
                 return;
             }
         }
+        instances.findFallbackServer().ifPresent(event::setInitialServer);
     }
 }

@@ -1,5 +1,3 @@
-use std::fmt::Debug;
-
 use cloud_core::{
     groups::group::{Group, GroupRole},
     logger::logger::{

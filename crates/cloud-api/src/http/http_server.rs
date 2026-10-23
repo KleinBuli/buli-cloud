@@ -166,6 +166,11 @@ async fn groups(State(core): State<Arc<CloudCore>>) -> Json<Vec<Group>> {
     Json(core.group_manager().groups().await)
 }
 
+async fn fallback(State(core): State<Arc<CloudCore>>) -> Json<Vec<String>> {
+    let groups = core.config_manager().config().fallback_groups().iter().cloned().collect();
+    Json(groups)
+}
+
 async fn group(State(core): State<Arc<CloudCore>>, Path(name): Path<String>) -> Result<Json<Group>, StatusCode> {
     core.group_manager().get_group(&name).await.map(Json).ok_or(StatusCode::NOT_FOUND)
 }
@@ -318,6 +323,7 @@ pub fn router(core: Arc<CloudCore>) -> Router {
         .route("/reload", post(reload))
         .route("/shutdown", post(shutdown))
         .route("/paths", get(paths))
+        .route("/groups/fallback", get(fallback))
         .route("/groups", get(groups))
         .route("/groups/{name}", get(group).post(create_group).delete(delete_group))
         .route("/groups/{name}/maintenance", post(enable_group_maintenance).delete(disable_group_maintenance))
